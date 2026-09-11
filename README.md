@@ -148,6 +148,12 @@ at its ideal width, so the default layout never scrolls sideways.
 Edit and Remove appear only when a connection is selected, rather than sitting
 there greyed out, and both are refused while that machine has a session open. The gear beside them opens Settings, where encryption lives.
 
+The **Help** menu has **Save Diagnostics…**, which writes what happened on the
+last few connection attempts to a text file: what was tried, what ssh said in
+full, and what the password channel did. Useful when something fails for a reason
+the status panel cannot name. It lists hostnames, usernames and key fingerprints,
+and no passwords, and the file says so at the top before anything else.
+
 The **?** button opens **What SSH-Wakey does**: what it saves, how connecting and
 the password work, what reaching a Mac at the FileVault screen needs, and what
 the different failures mean.

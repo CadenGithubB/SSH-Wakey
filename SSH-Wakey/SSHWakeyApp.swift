@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The app scene. `main.swift` calls `SSHWakeyApp.main()` after ruling out
 /// askpass mode, which is why there is no `@main` attribute here.
@@ -19,10 +20,58 @@ struct SSHWakeyApp: App {
         .defaultSize(width: Column.minimumWindowWidth + 120, height: 600)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .help) {
+                Button("What SSH-Wakey Does") {
+                    NotificationCenter.default.post(name: .showWakeyHelp, object: nil)
+                }
+                Divider()
+                Button("Save Diagnostics…", action: saveDiagnostics)
+                    .disabled(sessions.diagnostics.isEmpty)
+            }
         }
 
         Settings {
             SecuritySettingsView(store: store)
+        }
+    }
+}
+
+extension Notification.Name {
+    /// Posted by the Help menu, because a menu command cannot reach the
+    /// window's own state directly.
+    static let showWakeyHelp = Notification.Name("com.CadenGithubB.sshwakey.showHelp")
+}
+
+extension SSHWakeyApp {
+
+    /// Writes what happened on recent connection attempts to a file.
+    ///
+    /// The default Help item opens a help book this app does not have, so the
+    /// whole group is replaced rather than added to.
+    private func saveDiagnostics() {
+        let panel = NSSavePanel()
+        panel.title = "Save Diagnostics"
+        panel.nameFieldStringValue = DiagnosticsReport.suggestedFileName()
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        panel.message = "Hostnames, usernames and key fingerprints are in this file. "
+            + "No passwords are."
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let text = DiagnosticsReport.text(
+            entries: sessions.diagnostics,
+            connectionCount: store.connections.count,
+            isEncrypted: store.isEncrypted)
+
+        do {
+            try ProtectedFile.write(Data(text.utf8), to: url)
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "The diagnostics could not be saved."
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
         }
     }
 }

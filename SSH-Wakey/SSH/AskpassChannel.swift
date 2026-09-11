@@ -32,6 +32,19 @@ final class AskpassChannel: @unchecked Sendable {
         var wrongUserAttempts = 0
         /// Something connected that was not the helper this app started.
         var wrongProgramAttempts = 0
+
+        /// A line for the diagnostics file.
+        var summary: String {
+            var parts: [String] = [served ? "answered a password prompt" : "never asked"]
+            if repeatedPrompts > 0 { parts.append("\(repeatedPrompts) repeated prompt refused") }
+            for prompt in refusedPrompts where !prompt.isEmpty {
+                parts.append("declined a non-password prompt: \(prompt)")
+            }
+            if wrongNonceAttempts > 0 { parts.append("\(wrongNonceAttempts) with a bad token") }
+            if wrongUserAttempts > 0 { parts.append("\(wrongUserAttempts) from another user") }
+            if wrongProgramAttempts > 0 { parts.append("\(wrongProgramAttempts) from another program") }
+            return parts.joined(separator: ", ")
+        }
     }
 
     let nonce: String

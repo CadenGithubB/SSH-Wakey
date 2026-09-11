@@ -7,61 +7,63 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AB0000000000000000000034 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000001 /* main.swift */; };
-		AB0000000000000000000035 /* SSHWakeyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000002 /* SSHWakeyApp.swift */; };
-		AB0000000000000000000036 /* SSHConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000003 /* SSHConnection.swift */; };
-		AB0000000000000000000037 /* ConnectionFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000004 /* ConnectionFileStore.swift */; };
-		AB0000000000000000000038 /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000005 /* ConnectionStore.swift */; };
-		AB0000000000000000000039 /* ConnectionValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000006 /* ConnectionValidator.swift */; };
-		AB000000000000000000003A /* SSHArgumentParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000007 /* SSHArgumentParser.swift */; };
-		AB000000000000000000003B /* AskpassProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000008 /* AskpassProtocol.swift */; };
-		AB000000000000000000003C /* AskpassChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000009 /* AskpassChannel.swift */; };
-		AB000000000000000000003D /* AskpassHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000A /* AskpassHelper.swift */; };
-		AB000000000000000000003E /* SecureBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000B /* SecureBuffer.swift */; };
-		AB000000000000000000003F /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000C /* ProcessRunner.swift */; };
-		AB0000000000000000000040 /* SSHCommandBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000D /* SSHCommandBuilder.swift */; };
-		AB0000000000000000000041 /* SSHFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000E /* SSHFailure.swift */; };
-		AB0000000000000000000042 /* SSHSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000F /* SSHSessionManager.swift */; };
-		AB0000000000000000000043 /* HostKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000010 /* HostKeyService.swift */; };
-		AB0000000000000000000044 /* TerminalHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000011 /* TerminalHandoff.swift */; };
-		AB0000000000000000000045 /* NetworkScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000012 /* NetworkScope.swift */; };
-		AB0000000000000000000046 /* ConnectionVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000013 /* ConnectionVault.swift */; };
-		AB0000000000000000000047 /* KeychainKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000014 /* KeychainKeyStore.swift */; };
-		AB0000000000000000000048 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000015 /* ContentView.swift */; };
-		AB0000000000000000000049 /* ConnectionEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000016 /* ConnectionEditorView.swift */; };
-		AB000000000000000000004A /* PasswordPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000017 /* PasswordPromptView.swift */; };
-		AB000000000000000000004B /* HostKeyApprovalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000018 /* HostKeyApprovalView.swift */; };
-		AB000000000000000000004C /* StatusPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000019 /* StatusPanel.swift */; };
-		AB000000000000000000004D /* HelpNotes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001A /* HelpNotes.swift */; };
-		AB000000000000000000004E /* PassphraseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001B /* PassphraseSheet.swift */; };
-		AB000000000000000000004F /* SecuritySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001C /* SecuritySettingsView.swift */; };
-		AB0000000000000000000050 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001D /* Assets.xcassets */; };
-		AB0000000000000000000051 /* AbandonedSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001E /* AbandonedSessionTests.swift */; };
-		AB0000000000000000000052 /* ColumnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001F /* ColumnTests.swift */; };
-		AB0000000000000000000053 /* ConnectionHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000020 /* ConnectionHistoryTests.swift */; };
-		AB0000000000000000000054 /* ConnectionPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000021 /* ConnectionPersistenceTests.swift */; };
-		AB0000000000000000000055 /* ConnectionVaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000022 /* ConnectionVaultTests.swift */; };
-		AB0000000000000000000056 /* EncryptedStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000023 /* EncryptedStoreTests.swift */; };
-		AB0000000000000000000057 /* HostKeyWritingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000024 /* HostKeyWritingTests.swift */; };
-		AB0000000000000000000058 /* KeychainKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000025 /* KeychainKeyStoreTests.swift */; };
-		AB0000000000000000000059 /* NetworkScopeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000026 /* NetworkScopeTests.swift */; };
-		AB000000000000000000005A /* PasswordChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000027 /* PasswordChannelTests.swift */; };
-		AB000000000000000000005B /* ProcessRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000028 /* ProcessRunnerTests.swift */; };
-		AB000000000000000000005C /* ProtectedFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000029 /* ProtectedFileTests.swift */; };
-		AB000000000000000000005D /* SSHArgumentParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002A /* SSHArgumentParserTests.swift */; };
-		AB000000000000000000005E /* SSHCommandBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002B /* SSHCommandBuilderTests.swift */; };
-		AB000000000000000000005F /* SSHOutputClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002C /* SSHOutputClassifierTests.swift */; };
-		AB0000000000000000000060 /* SecureBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002D /* SecureBufferTests.swift */; };
-		AB0000000000000000000061 /* TerminalHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002E /* TerminalHandoffTests.swift */; };
-		AB0000000000000000000062 /* ValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002F /* ValidationTests.swift */; };
+		AB0000000000000000000036 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000001 /* main.swift */; };
+		AB0000000000000000000037 /* SSHWakeyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000002 /* SSHWakeyApp.swift */; };
+		AB0000000000000000000038 /* SSHConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000003 /* SSHConnection.swift */; };
+		AB0000000000000000000039 /* ConnectionFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000004 /* ConnectionFileStore.swift */; };
+		AB000000000000000000003A /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000005 /* ConnectionStore.swift */; };
+		AB000000000000000000003B /* ConnectionValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000006 /* ConnectionValidator.swift */; };
+		AB000000000000000000003C /* SSHArgumentParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000007 /* SSHArgumentParser.swift */; };
+		AB000000000000000000003D /* AskpassProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000008 /* AskpassProtocol.swift */; };
+		AB000000000000000000003E /* AskpassChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000009 /* AskpassChannel.swift */; };
+		AB000000000000000000003F /* AskpassHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000A /* AskpassHelper.swift */; };
+		AB0000000000000000000040 /* SecureBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000B /* SecureBuffer.swift */; };
+		AB0000000000000000000041 /* ProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000C /* ProcessRunner.swift */; };
+		AB0000000000000000000042 /* SSHCommandBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000D /* SSHCommandBuilder.swift */; };
+		AB0000000000000000000043 /* SSHFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000E /* SSHFailure.swift */; };
+		AB0000000000000000000044 /* SSHSessionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000000F /* SSHSessionManager.swift */; };
+		AB0000000000000000000045 /* HostKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000010 /* HostKeyService.swift */; };
+		AB0000000000000000000046 /* TerminalHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000011 /* TerminalHandoff.swift */; };
+		AB0000000000000000000047 /* NetworkScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000012 /* NetworkScope.swift */; };
+		AB0000000000000000000048 /* DiagnosticsReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000013 /* DiagnosticsReport.swift */; };
+		AB0000000000000000000049 /* ConnectionVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000014 /* ConnectionVault.swift */; };
+		AB000000000000000000004A /* KeychainKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000015 /* KeychainKeyStore.swift */; };
+		AB000000000000000000004B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000016 /* ContentView.swift */; };
+		AB000000000000000000004C /* ConnectionEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000017 /* ConnectionEditorView.swift */; };
+		AB000000000000000000004D /* PasswordPromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000018 /* PasswordPromptView.swift */; };
+		AB000000000000000000004E /* HostKeyApprovalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000019 /* HostKeyApprovalView.swift */; };
+		AB000000000000000000004F /* StatusPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001A /* StatusPanel.swift */; };
+		AB0000000000000000000050 /* HelpNotes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001B /* HelpNotes.swift */; };
+		AB0000000000000000000051 /* PassphraseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001C /* PassphraseSheet.swift */; };
+		AB0000000000000000000052 /* SecuritySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001D /* SecuritySettingsView.swift */; };
+		AB0000000000000000000053 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001E /* Assets.xcassets */; };
+		AB0000000000000000000054 /* AbandonedSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001F /* AbandonedSessionTests.swift */; };
+		AB0000000000000000000055 /* ColumnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000020 /* ColumnTests.swift */; };
+		AB0000000000000000000056 /* ConnectionHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000021 /* ConnectionHistoryTests.swift */; };
+		AB0000000000000000000057 /* ConnectionPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000022 /* ConnectionPersistenceTests.swift */; };
+		AB0000000000000000000058 /* ConnectionVaultTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000023 /* ConnectionVaultTests.swift */; };
+		AB0000000000000000000059 /* DiagnosticsReportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000024 /* DiagnosticsReportTests.swift */; };
+		AB000000000000000000005A /* EncryptedStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000025 /* EncryptedStoreTests.swift */; };
+		AB000000000000000000005B /* HostKeyWritingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000026 /* HostKeyWritingTests.swift */; };
+		AB000000000000000000005C /* KeychainKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000027 /* KeychainKeyStoreTests.swift */; };
+		AB000000000000000000005D /* NetworkScopeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000028 /* NetworkScopeTests.swift */; };
+		AB000000000000000000005E /* PasswordChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000029 /* PasswordChannelTests.swift */; };
+		AB000000000000000000005F /* ProcessRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002A /* ProcessRunnerTests.swift */; };
+		AB0000000000000000000060 /* ProtectedFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002B /* ProtectedFileTests.swift */; };
+		AB0000000000000000000061 /* SSHArgumentParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002C /* SSHArgumentParserTests.swift */; };
+		AB0000000000000000000062 /* SSHCommandBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002D /* SSHCommandBuilderTests.swift */; };
+		AB0000000000000000000063 /* SSHOutputClassifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002E /* SSHOutputClassifierTests.swift */; };
+		AB0000000000000000000064 /* SecureBufferTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002F /* SecureBufferTests.swift */; };
+		AB0000000000000000000065 /* TerminalHandoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000030 /* TerminalHandoffTests.swift */; };
+		AB0000000000000000000066 /* ValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000031 /* ValidationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		AB000000000000000000007B /* PBXContainerItemProxy */ = {
+		AB000000000000000000007F /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
-			containerPortal = AB000000000000000000007D /* Project object */;
+			containerPortal = AB0000000000000000000081 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = AB0000000000000000000079;
+			remoteGlobalIDString = AB000000000000000000007D;
 			remoteInfo = "SSH-Wakey";
 		};
 /* End PBXContainerItemProxy section */
@@ -85,50 +87,52 @@
 		AB0000000000000000000010 /* HostKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostKeyService.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000011 /* TerminalHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalHandoff.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000012 /* NetworkScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkScope.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000013 /* ConnectionVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionVault.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000014 /* KeychainKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainKeyStore.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000015 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000016 /* ConnectionEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionEditorView.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000017 /* PasswordPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PasswordPromptView.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000018 /* HostKeyApprovalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostKeyApprovalView.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000019 /* StatusPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StatusPanel.swift"; sourceTree = "<group>"; };
-		AB000000000000000000001A /* HelpNotes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HelpNotes.swift"; sourceTree = "<group>"; };
-		AB000000000000000000001B /* PassphraseSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PassphraseSheet.swift"; sourceTree = "<group>"; };
-		AB000000000000000000001C /* SecuritySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SecuritySettingsView.swift"; sourceTree = "<group>"; };
-		AB000000000000000000001D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
-		AB000000000000000000001E /* AbandonedSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AbandonedSessionTests.swift"; sourceTree = "<group>"; };
-		AB000000000000000000001F /* ColumnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ColumnTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000020 /* ConnectionHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionHistoryTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000021 /* ConnectionPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionPersistenceTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000022 /* ConnectionVaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionVaultTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000023 /* EncryptedStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EncryptedStoreTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000024 /* HostKeyWritingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostKeyWritingTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000025 /* KeychainKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainKeyStoreTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000026 /* NetworkScopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkScopeTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000027 /* PasswordChannelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PasswordChannelTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000028 /* ProcessRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProcessRunnerTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000029 /* ProtectedFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProtectedFileTests.swift"; sourceTree = "<group>"; };
-		AB000000000000000000002A /* SSHArgumentParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SSHArgumentParserTests.swift"; sourceTree = "<group>"; };
-		AB000000000000000000002B /* SSHCommandBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SSHCommandBuilderTests.swift"; sourceTree = "<group>"; };
-		AB000000000000000000002C /* SSHOutputClassifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SSHOutputClassifierTests.swift"; sourceTree = "<group>"; };
-		AB000000000000000000002D /* SecureBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SecureBufferTests.swift"; sourceTree = "<group>"; };
-		AB000000000000000000002E /* TerminalHandoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalHandoffTests.swift"; sourceTree = "<group>"; };
-		AB000000000000000000002F /* ValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ValidationTests.swift"; sourceTree = "<group>"; };
-		AB0000000000000000000030 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "README.md"; sourceTree = "<group>"; };
-		AB0000000000000000000031 /* SECURITY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "SECURITY.md"; sourceTree = "<group>"; };
-		AB0000000000000000000032 /* SSH-Wakey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "SSH-Wakey.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		AB0000000000000000000033 /* SSH-WakeyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "SSH-WakeyTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB0000000000000000000013 /* DiagnosticsReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DiagnosticsReport.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000014 /* ConnectionVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionVault.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000015 /* KeychainKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainKeyStore.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000016 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000017 /* ConnectionEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionEditorView.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000018 /* PasswordPromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PasswordPromptView.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000019 /* HostKeyApprovalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostKeyApprovalView.swift"; sourceTree = "<group>"; };
+		AB000000000000000000001A /* StatusPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StatusPanel.swift"; sourceTree = "<group>"; };
+		AB000000000000000000001B /* HelpNotes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HelpNotes.swift"; sourceTree = "<group>"; };
+		AB000000000000000000001C /* PassphraseSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PassphraseSheet.swift"; sourceTree = "<group>"; };
+		AB000000000000000000001D /* SecuritySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SecuritySettingsView.swift"; sourceTree = "<group>"; };
+		AB000000000000000000001E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+		AB000000000000000000001F /* AbandonedSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AbandonedSessionTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000020 /* ColumnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ColumnTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000021 /* ConnectionHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionHistoryTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000022 /* ConnectionPersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionPersistenceTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000023 /* ConnectionVaultTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionVaultTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000024 /* DiagnosticsReportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DiagnosticsReportTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000025 /* EncryptedStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EncryptedStoreTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000026 /* HostKeyWritingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostKeyWritingTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000027 /* KeychainKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainKeyStoreTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000028 /* NetworkScopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkScopeTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000029 /* PasswordChannelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PasswordChannelTests.swift"; sourceTree = "<group>"; };
+		AB000000000000000000002A /* ProcessRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProcessRunnerTests.swift"; sourceTree = "<group>"; };
+		AB000000000000000000002B /* ProtectedFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProtectedFileTests.swift"; sourceTree = "<group>"; };
+		AB000000000000000000002C /* SSHArgumentParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SSHArgumentParserTests.swift"; sourceTree = "<group>"; };
+		AB000000000000000000002D /* SSHCommandBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SSHCommandBuilderTests.swift"; sourceTree = "<group>"; };
+		AB000000000000000000002E /* SSHOutputClassifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SSHOutputClassifierTests.swift"; sourceTree = "<group>"; };
+		AB000000000000000000002F /* SecureBufferTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SecureBufferTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000030 /* TerminalHandoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalHandoffTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000031 /* ValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ValidationTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000032 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "README.md"; sourceTree = "<group>"; };
+		AB0000000000000000000033 /* SECURITY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "SECURITY.md"; sourceTree = "<group>"; };
+		AB0000000000000000000034 /* SSH-Wakey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "SSH-Wakey.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB0000000000000000000035 /* SSH-WakeyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "SSH-WakeyTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		AB000000000000000000006E /* Frameworks */ = {
+		AB0000000000000000000072 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AB000000000000000000006F /* Frameworks */ = {
+		AB0000000000000000000073 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -138,7 +142,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		AB0000000000000000000063 /* Models */ = {
+		AB0000000000000000000067 /* Models */ = {
 			isa = PBXGroup;
 			children = (
 				AB0000000000000000000003 /* SSHConnection.swift */,
@@ -150,7 +154,7 @@
 			path = "Models";
 			sourceTree = "<group>";
 		};
-		AB0000000000000000000064 /* SSH */ = {
+		AB0000000000000000000068 /* SSH */ = {
 			isa = PBXGroup;
 			children = (
 				AB0000000000000000000008 /* AskpassProtocol.swift */,
@@ -164,103 +168,105 @@
 				AB0000000000000000000010 /* HostKeyService.swift */,
 				AB0000000000000000000011 /* TerminalHandoff.swift */,
 				AB0000000000000000000012 /* NetworkScope.swift */,
+				AB0000000000000000000013 /* DiagnosticsReport.swift */,
 			);
 			path = "SSH";
 			sourceTree = "<group>";
 		};
-		AB0000000000000000000065 /* Views */ = {
+		AB0000000000000000000069 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				AB0000000000000000000015 /* ContentView.swift */,
-				AB0000000000000000000016 /* ConnectionEditorView.swift */,
-				AB0000000000000000000017 /* PasswordPromptView.swift */,
-				AB0000000000000000000018 /* HostKeyApprovalView.swift */,
-				AB0000000000000000000019 /* StatusPanel.swift */,
-				AB000000000000000000001A /* HelpNotes.swift */,
-				AB000000000000000000001B /* PassphraseSheet.swift */,
-				AB000000000000000000001C /* SecuritySettingsView.swift */,
+				AB0000000000000000000016 /* ContentView.swift */,
+				AB0000000000000000000017 /* ConnectionEditorView.swift */,
+				AB0000000000000000000018 /* PasswordPromptView.swift */,
+				AB0000000000000000000019 /* HostKeyApprovalView.swift */,
+				AB000000000000000000001A /* StatusPanel.swift */,
+				AB000000000000000000001B /* HelpNotes.swift */,
+				AB000000000000000000001C /* PassphraseSheet.swift */,
+				AB000000000000000000001D /* SecuritySettingsView.swift */,
 			);
 			path = "Views";
 			sourceTree = "<group>";
 		};
-		AB0000000000000000000066 /* Security */ = {
+		AB000000000000000000006A /* Security */ = {
 			isa = PBXGroup;
 			children = (
-				AB0000000000000000000013 /* ConnectionVault.swift */,
-				AB0000000000000000000014 /* KeychainKeyStore.swift */,
+				AB0000000000000000000014 /* ConnectionVault.swift */,
+				AB0000000000000000000015 /* KeychainKeyStore.swift */,
 			);
 			path = "Security";
 			sourceTree = "<group>";
 		};
-		AB0000000000000000000067 /* SSH-Wakey */ = {
+		AB000000000000000000006B /* SSH-Wakey */ = {
 			isa = PBXGroup;
 			children = (
 				AB0000000000000000000001 /* main.swift */,
 				AB0000000000000000000002 /* SSHWakeyApp.swift */,
-				AB0000000000000000000063 /* Models */,
-				AB0000000000000000000064 /* SSH */,
-				AB0000000000000000000066 /* Security */,
-				AB0000000000000000000065 /* Views */,
-				AB000000000000000000001D /* Assets.xcassets */,
+				AB0000000000000000000067 /* Models */,
+				AB0000000000000000000068 /* SSH */,
+				AB000000000000000000006A /* Security */,
+				AB0000000000000000000069 /* Views */,
+				AB000000000000000000001E /* Assets.xcassets */,
 			);
 			path = "SSH-Wakey";
 			sourceTree = "<group>";
 		};
-		AB0000000000000000000068 /* SSH-WakeyTests */ = {
+		AB000000000000000000006C /* SSH-WakeyTests */ = {
 			isa = PBXGroup;
 			children = (
-				AB000000000000000000001E /* AbandonedSessionTests.swift */,
-				AB000000000000000000001F /* ColumnTests.swift */,
-				AB0000000000000000000020 /* ConnectionHistoryTests.swift */,
-				AB0000000000000000000021 /* ConnectionPersistenceTests.swift */,
-				AB0000000000000000000022 /* ConnectionVaultTests.swift */,
-				AB0000000000000000000023 /* EncryptedStoreTests.swift */,
-				AB0000000000000000000024 /* HostKeyWritingTests.swift */,
-				AB0000000000000000000025 /* KeychainKeyStoreTests.swift */,
-				AB0000000000000000000026 /* NetworkScopeTests.swift */,
-				AB0000000000000000000027 /* PasswordChannelTests.swift */,
-				AB0000000000000000000028 /* ProcessRunnerTests.swift */,
-				AB0000000000000000000029 /* ProtectedFileTests.swift */,
-				AB000000000000000000002A /* SSHArgumentParserTests.swift */,
-				AB000000000000000000002B /* SSHCommandBuilderTests.swift */,
-				AB000000000000000000002C /* SSHOutputClassifierTests.swift */,
-				AB000000000000000000002D /* SecureBufferTests.swift */,
-				AB000000000000000000002E /* TerminalHandoffTests.swift */,
-				AB000000000000000000002F /* ValidationTests.swift */,
+				AB000000000000000000001F /* AbandonedSessionTests.swift */,
+				AB0000000000000000000020 /* ColumnTests.swift */,
+				AB0000000000000000000021 /* ConnectionHistoryTests.swift */,
+				AB0000000000000000000022 /* ConnectionPersistenceTests.swift */,
+				AB0000000000000000000023 /* ConnectionVaultTests.swift */,
+				AB0000000000000000000024 /* DiagnosticsReportTests.swift */,
+				AB0000000000000000000025 /* EncryptedStoreTests.swift */,
+				AB0000000000000000000026 /* HostKeyWritingTests.swift */,
+				AB0000000000000000000027 /* KeychainKeyStoreTests.swift */,
+				AB0000000000000000000028 /* NetworkScopeTests.swift */,
+				AB0000000000000000000029 /* PasswordChannelTests.swift */,
+				AB000000000000000000002A /* ProcessRunnerTests.swift */,
+				AB000000000000000000002B /* ProtectedFileTests.swift */,
+				AB000000000000000000002C /* SSHArgumentParserTests.swift */,
+				AB000000000000000000002D /* SSHCommandBuilderTests.swift */,
+				AB000000000000000000002E /* SSHOutputClassifierTests.swift */,
+				AB000000000000000000002F /* SecureBufferTests.swift */,
+				AB0000000000000000000030 /* TerminalHandoffTests.swift */,
+				AB0000000000000000000031 /* ValidationTests.swift */,
 			);
 			path = "SSH-WakeyTests";
 			sourceTree = "<group>";
 		};
-		AB0000000000000000000069 /* Products */ = {
+		AB000000000000000000006D /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				AB0000000000000000000032 /* SSH-Wakey.app */,
-				AB0000000000000000000033 /* SSH-WakeyTests.xctest */,
+				AB0000000000000000000034 /* SSH-Wakey.app */,
+				AB0000000000000000000035 /* SSH-WakeyTests.xctest */,
 			);
 			name = "Products";
 			sourceTree = "<group>";
 		};
-		AB000000000000000000006A /* Group */ = {
+		AB000000000000000000006E /* Group */ = {
 			isa = PBXGroup;
 			children = (
-				AB0000000000000000000067 /* SSH-Wakey */,
-				AB0000000000000000000068 /* SSH-WakeyTests */,
-				AB0000000000000000000030 /* README.md */,
-				AB0000000000000000000031 /* SECURITY.md */,
-				AB0000000000000000000069 /* Products */,
+				AB000000000000000000006B /* SSH-Wakey */,
+				AB000000000000000000006C /* SSH-WakeyTests */,
+				AB0000000000000000000032 /* README.md */,
+				AB0000000000000000000033 /* SECURITY.md */,
+				AB000000000000000000006D /* Products */,
 			);
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		AB0000000000000000000079 /* SSH-Wakey */ = {
+		AB000000000000000000007D /* SSH-Wakey */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AB0000000000000000000075 /* Build configuration list for PBXNativeTarget "SSH-Wakey" */;
+			buildConfigurationList = AB0000000000000000000079 /* Build configuration list for PBXNativeTarget "SSH-Wakey" */;
 			buildPhases = (
-				AB000000000000000000006B /* Sources */,
-				AB000000000000000000006E /* Frameworks */,
-				AB000000000000000000006C /* Resources */,
+				AB000000000000000000006F /* Sources */,
+				AB0000000000000000000072 /* Frameworks */,
+				AB0000000000000000000070 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -268,147 +274,149 @@
 			);
 			name = "SSH-Wakey";
 			productName = "SSH-Wakey";
-			productReference = AB0000000000000000000032 /* SSH-Wakey.app */;
+			productReference = AB0000000000000000000034 /* SSH-Wakey.app */;
 			productType = "com.apple.product-type.application";
 		};
-		AB000000000000000000007A /* SSH-WakeyTests */ = {
+		AB000000000000000000007E /* SSH-WakeyTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AB0000000000000000000078 /* Build configuration list for PBXNativeTarget "SSH-WakeyTests" */;
+			buildConfigurationList = AB000000000000000000007C /* Build configuration list for PBXNativeTarget "SSH-WakeyTests" */;
 			buildPhases = (
-				AB000000000000000000006D /* Sources */,
-				AB000000000000000000006F /* Frameworks */,
+				AB0000000000000000000071 /* Sources */,
+				AB0000000000000000000073 /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				AB000000000000000000007C /* PBXTargetDependency */,
+				AB0000000000000000000080 /* PBXTargetDependency */,
 			);
 			name = "SSH-WakeyTests";
 			productName = "SSH-WakeyTests";
-			productReference = AB0000000000000000000033 /* SSH-WakeyTests.xctest */;
+			productReference = AB0000000000000000000035 /* SSH-WakeyTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		AB000000000000000000007D /* Project object */ = {
+		AB0000000000000000000081 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1640;
 				LastUpgradeCheck = 1640;
 				TargetAttributes = {
-					AB0000000000000000000079 = {
+					AB000000000000000000007D = {
 						CreatedOnToolsVersion = 16.4;
 					};
-					AB000000000000000000007A = {
+					AB000000000000000000007E = {
 						CreatedOnToolsVersion = 16.4;
-						TestTargetID = AB0000000000000000000079;
+						TestTargetID = AB000000000000000000007D;
 					};
 				};
 			};
-			buildConfigurationList = AB0000000000000000000072 /* Build configuration list for PBXProject "SSH-Wakey" */;
+			buildConfigurationList = AB0000000000000000000076 /* Build configuration list for PBXProject "SSH-Wakey" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
 			);
-			mainGroup = AB000000000000000000006A;
-			productRefGroup = AB0000000000000000000069 /* Products */;
+			mainGroup = AB000000000000000000006E;
+			productRefGroup = AB000000000000000000006D /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				AB0000000000000000000079 /* SSH-Wakey */,
-				AB000000000000000000007A /* SSH-WakeyTests */,
+				AB000000000000000000007D /* SSH-Wakey */,
+				AB000000000000000000007E /* SSH-WakeyTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		AB000000000000000000006C /* Resources */ = {
+		AB0000000000000000000070 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AB0000000000000000000050 /* Assets.xcassets in Resources */,
+				AB0000000000000000000053 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		AB000000000000000000006B /* Sources */ = {
+		AB000000000000000000006F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AB0000000000000000000034 /* main.swift in Sources */,
-				AB0000000000000000000035 /* SSHWakeyApp.swift in Sources */,
-				AB0000000000000000000036 /* SSHConnection.swift in Sources */,
-				AB0000000000000000000037 /* ConnectionFileStore.swift in Sources */,
-				AB0000000000000000000038 /* ConnectionStore.swift in Sources */,
-				AB0000000000000000000039 /* ConnectionValidator.swift in Sources */,
-				AB000000000000000000003A /* SSHArgumentParser.swift in Sources */,
-				AB000000000000000000003B /* AskpassProtocol.swift in Sources */,
-				AB000000000000000000003C /* AskpassChannel.swift in Sources */,
-				AB000000000000000000003D /* AskpassHelper.swift in Sources */,
-				AB000000000000000000003E /* SecureBuffer.swift in Sources */,
-				AB000000000000000000003F /* ProcessRunner.swift in Sources */,
-				AB0000000000000000000040 /* SSHCommandBuilder.swift in Sources */,
-				AB0000000000000000000041 /* SSHFailure.swift in Sources */,
-				AB0000000000000000000042 /* SSHSessionManager.swift in Sources */,
-				AB0000000000000000000043 /* HostKeyService.swift in Sources */,
-				AB0000000000000000000044 /* TerminalHandoff.swift in Sources */,
-				AB0000000000000000000045 /* NetworkScope.swift in Sources */,
-				AB0000000000000000000046 /* ConnectionVault.swift in Sources */,
-				AB0000000000000000000047 /* KeychainKeyStore.swift in Sources */,
-				AB0000000000000000000048 /* ContentView.swift in Sources */,
-				AB0000000000000000000049 /* ConnectionEditorView.swift in Sources */,
-				AB000000000000000000004A /* PasswordPromptView.swift in Sources */,
-				AB000000000000000000004B /* HostKeyApprovalView.swift in Sources */,
-				AB000000000000000000004C /* StatusPanel.swift in Sources */,
-				AB000000000000000000004D /* HelpNotes.swift in Sources */,
-				AB000000000000000000004E /* PassphraseSheet.swift in Sources */,
-				AB000000000000000000004F /* SecuritySettingsView.swift in Sources */,
+				AB0000000000000000000036 /* main.swift in Sources */,
+				AB0000000000000000000037 /* SSHWakeyApp.swift in Sources */,
+				AB0000000000000000000038 /* SSHConnection.swift in Sources */,
+				AB0000000000000000000039 /* ConnectionFileStore.swift in Sources */,
+				AB000000000000000000003A /* ConnectionStore.swift in Sources */,
+				AB000000000000000000003B /* ConnectionValidator.swift in Sources */,
+				AB000000000000000000003C /* SSHArgumentParser.swift in Sources */,
+				AB000000000000000000003D /* AskpassProtocol.swift in Sources */,
+				AB000000000000000000003E /* AskpassChannel.swift in Sources */,
+				AB000000000000000000003F /* AskpassHelper.swift in Sources */,
+				AB0000000000000000000040 /* SecureBuffer.swift in Sources */,
+				AB0000000000000000000041 /* ProcessRunner.swift in Sources */,
+				AB0000000000000000000042 /* SSHCommandBuilder.swift in Sources */,
+				AB0000000000000000000043 /* SSHFailure.swift in Sources */,
+				AB0000000000000000000044 /* SSHSessionManager.swift in Sources */,
+				AB0000000000000000000045 /* HostKeyService.swift in Sources */,
+				AB0000000000000000000046 /* TerminalHandoff.swift in Sources */,
+				AB0000000000000000000047 /* NetworkScope.swift in Sources */,
+				AB0000000000000000000048 /* DiagnosticsReport.swift in Sources */,
+				AB0000000000000000000049 /* ConnectionVault.swift in Sources */,
+				AB000000000000000000004A /* KeychainKeyStore.swift in Sources */,
+				AB000000000000000000004B /* ContentView.swift in Sources */,
+				AB000000000000000000004C /* ConnectionEditorView.swift in Sources */,
+				AB000000000000000000004D /* PasswordPromptView.swift in Sources */,
+				AB000000000000000000004E /* HostKeyApprovalView.swift in Sources */,
+				AB000000000000000000004F /* StatusPanel.swift in Sources */,
+				AB0000000000000000000050 /* HelpNotes.swift in Sources */,
+				AB0000000000000000000051 /* PassphraseSheet.swift in Sources */,
+				AB0000000000000000000052 /* SecuritySettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		AB000000000000000000006D /* Sources */ = {
+		AB0000000000000000000071 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AB0000000000000000000051 /* AbandonedSessionTests.swift in Sources */,
-				AB0000000000000000000052 /* ColumnTests.swift in Sources */,
-				AB0000000000000000000053 /* ConnectionHistoryTests.swift in Sources */,
-				AB0000000000000000000054 /* ConnectionPersistenceTests.swift in Sources */,
-				AB0000000000000000000055 /* ConnectionVaultTests.swift in Sources */,
-				AB0000000000000000000056 /* EncryptedStoreTests.swift in Sources */,
-				AB0000000000000000000057 /* HostKeyWritingTests.swift in Sources */,
-				AB0000000000000000000058 /* KeychainKeyStoreTests.swift in Sources */,
-				AB0000000000000000000059 /* NetworkScopeTests.swift in Sources */,
-				AB000000000000000000005A /* PasswordChannelTests.swift in Sources */,
-				AB000000000000000000005B /* ProcessRunnerTests.swift in Sources */,
-				AB000000000000000000005C /* ProtectedFileTests.swift in Sources */,
-				AB000000000000000000005D /* SSHArgumentParserTests.swift in Sources */,
-				AB000000000000000000005E /* SSHCommandBuilderTests.swift in Sources */,
-				AB000000000000000000005F /* SSHOutputClassifierTests.swift in Sources */,
-				AB0000000000000000000060 /* SecureBufferTests.swift in Sources */,
-				AB0000000000000000000061 /* TerminalHandoffTests.swift in Sources */,
-				AB0000000000000000000062 /* ValidationTests.swift in Sources */,
+				AB0000000000000000000054 /* AbandonedSessionTests.swift in Sources */,
+				AB0000000000000000000055 /* ColumnTests.swift in Sources */,
+				AB0000000000000000000056 /* ConnectionHistoryTests.swift in Sources */,
+				AB0000000000000000000057 /* ConnectionPersistenceTests.swift in Sources */,
+				AB0000000000000000000058 /* ConnectionVaultTests.swift in Sources */,
+				AB0000000000000000000059 /* DiagnosticsReportTests.swift in Sources */,
+				AB000000000000000000005A /* EncryptedStoreTests.swift in Sources */,
+				AB000000000000000000005B /* HostKeyWritingTests.swift in Sources */,
+				AB000000000000000000005C /* KeychainKeyStoreTests.swift in Sources */,
+				AB000000000000000000005D /* NetworkScopeTests.swift in Sources */,
+				AB000000000000000000005E /* PasswordChannelTests.swift in Sources */,
+				AB000000000000000000005F /* ProcessRunnerTests.swift in Sources */,
+				AB0000000000000000000060 /* ProtectedFileTests.swift in Sources */,
+				AB0000000000000000000061 /* SSHArgumentParserTests.swift in Sources */,
+				AB0000000000000000000062 /* SSHCommandBuilderTests.swift in Sources */,
+				AB0000000000000000000063 /* SSHOutputClassifierTests.swift in Sources */,
+				AB0000000000000000000064 /* SecureBufferTests.swift in Sources */,
+				AB0000000000000000000065 /* TerminalHandoffTests.swift in Sources */,
+				AB0000000000000000000066 /* ValidationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		AB000000000000000000007C /* PBXTargetDependency */ = {
+		AB0000000000000000000080 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = AB0000000000000000000079 /* SSH-Wakey */;
-			targetProxy = AB000000000000000000007B /* PBXContainerItemProxy */;
+			target = AB000000000000000000007D /* SSH-Wakey */;
+			targetProxy = AB000000000000000000007F /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		AB0000000000000000000070 /* Debug */ = {
+		AB0000000000000000000074 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -442,7 +450,7 @@
 			};
 			name = Debug;
 		};
-		AB0000000000000000000071 /* Release */ = {
+		AB0000000000000000000075 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -471,7 +479,7 @@
 			};
 			name = Release;
 		};
-		AB0000000000000000000073 /* Debug */ = {
+		AB0000000000000000000077 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -492,7 +500,7 @@
 			};
 			name = Debug;
 		};
-		AB0000000000000000000074 /* Release */ = {
+		AB0000000000000000000078 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -514,7 +522,7 @@
 			};
 			name = Release;
 		};
-		AB0000000000000000000076 /* Debug */ = {
+		AB000000000000000000007A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
@@ -529,7 +537,7 @@
 			};
 			name = Debug;
 		};
-		AB0000000000000000000077 /* Release */ = {
+		AB000000000000000000007B /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
@@ -547,34 +555,34 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		AB0000000000000000000072 /* Build configuration list for PBXProject "SSH-Wakey" */ = {
+		AB0000000000000000000076 /* Build configuration list for PBXProject "SSH-Wakey" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AB0000000000000000000070 /* Debug */,
-				AB0000000000000000000071 /* Release */,
+				AB0000000000000000000074 /* Debug */,
+				AB0000000000000000000075 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		AB0000000000000000000075 /* Build configuration list for PBXNativeTarget "SSH-Wakey" */ = {
+		AB0000000000000000000079 /* Build configuration list for PBXNativeTarget "SSH-Wakey" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AB0000000000000000000073 /* Debug */,
-				AB0000000000000000000074 /* Release */,
+				AB0000000000000000000077 /* Debug */,
+				AB0000000000000000000078 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		AB0000000000000000000078 /* Build configuration list for PBXNativeTarget "SSH-WakeyTests" */ = {
+		AB000000000000000000007C /* Build configuration list for PBXNativeTarget "SSH-WakeyTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AB0000000000000000000076 /* Debug */,
-				AB0000000000000000000077 /* Release */,
+				AB000000000000000000007A /* Debug */,
+				AB000000000000000000007B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = AB000000000000000000007D /* Project object */;
+	rootObject = AB0000000000000000000081 /* Project object */;
 }

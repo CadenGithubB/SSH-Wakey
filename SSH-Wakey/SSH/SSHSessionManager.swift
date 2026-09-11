@@ -64,6 +64,9 @@ final class SSHSessionManager {
     private(set) var states: [UUID: State] = [:]
     /// Set when opening Terminal fails, so the window can show it.
     var lastActionError: String?
+    /// Recent attempts, kept so they can be written out when something needs
+    /// explaining. Bounded, and gone when the app quits.
+    private(set) var diagnostics: [DiagnosticEntry] = []
 
     private var sessions: [UUID: Session] = [:]
     private var attempts: [UUID: Task<Void, Never>] = [:]
@@ -235,6 +238,8 @@ final class SSHSessionManager {
             terminate(process)
             errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
+            record(connection, mode: mode, result: "Cancelled",
+                   channel: channel.outcome, output: diagnostics.text)
             states[id] = .failed(SSHFailure(
                 kind: .cancelled,
                 headline: "Connection cancelled.",
@@ -252,6 +257,8 @@ final class SSHSessionManager {
                     guidance: "ssh did not finish authenticating within \(Int(Self.overallTimeout)) seconds.",
                     detail: diagnostics.text.isEmpty ? nil : diagnostics.text)
             }
+            record(connection, mode: mode, result: failure.headline,
+                   channel: channel.outcome, output: diagnostics.text)
             states[id] = .failed(Self.annotated(failure, with: channel.outcome, host: connection.host))
             return
         case .exited:
@@ -267,6 +274,8 @@ final class SSHSessionManager {
                 failure.kind = .askpassRefused
                 failure.headline = "ssh asked for something other than a password."
             }
+            record(connection, mode: mode, result: failure.headline,
+                   channel: outcome, output: diagnostics.text)
             states[id] = .failed(Self.annotated(failure, with: outcome, host: connection.host))
             return
         }
@@ -278,6 +287,8 @@ final class SSHSessionManager {
             terminate(process)
             errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
+            record(connection, mode: mode, result: "Logged in, then closed as asked",
+                   channel: channel.outcome, output: diagnostics.text)
             states[id] = .unlocked(
                 Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: false))
             return
@@ -289,6 +300,8 @@ final class SSHSessionManager {
             // so it is reported as a success rather than a failure.
             errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
+            record(connection, mode: mode, result: "Logged in, then the machine closed it",
+                   channel: channel.outcome, output: diagnostics.text)
             states[id] = .unlocked(
                 Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: true))
             return
@@ -317,6 +330,8 @@ final class SSHSessionManager {
             return
         }
 
+        record(connection, mode: mode, result: "Connected",
+               channel: channel.outcome, output: diagnostics.text)
         errorPipe.fileHandleForReading.readabilityHandler = nil
         sessions[id] = Session(
             process: process, controlPath: controlPath, directoryURL: directory, connection: connection)
@@ -326,6 +341,27 @@ final class SSHSessionManager {
             Task { @MainActor [weak self] in self?.masterExited(id) }
         }
         if !process.isRunning { masterExited(id) }
+    }
+
+    /// Records what happened, for the diagnostics file.
+    private func record(
+        _ connection: SSHConnection,
+        mode: ConnectMode,
+        result: String,
+        channel: AskpassChannel.Outcome,
+        output: String
+    ) {
+        diagnostics.append(DiagnosticEntry(
+            at: Date(),
+            connection: connection.name,
+            destination: connection.displayDestination,
+            mode: mode.title,
+            result: result,
+            channel: channel.summary,
+            output: output))
+        if diagnostics.count > DiagnosticsReport.maximumEntries {
+            diagnostics.removeFirst(diagnostics.count - DiagnosticsReport.maximumEntries)
+        }
     }
 
     private enum AttemptOutcome: Equatable {

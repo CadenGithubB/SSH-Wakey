@@ -74,6 +74,9 @@ struct ContentView: View {
             Task { await SSHSessionManager.sweepAbandonedSessions() }
         }
         .onChange(of: columns) { _, layout in saveColumnLayout(layout) }
+        .onReceive(NotificationCenter.default.publisher(for: .showWakeyHelp)) { _ in
+            sheet = .help
+        }
         .sheet(item: $sheet, content: sheetContent)
         .alert(
             "Remove “\(removalTarget?.name ?? "")”?",
