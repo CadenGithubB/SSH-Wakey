@@ -39,7 +39,7 @@ final class PasswordChannelTests: XCTestCase {
         let answer = ask(
             socket: try socketPath(of: channel),
             nonce: channel.nonce,
-            prompt: "morgan@10.0.0.4's password: ")
+            prompt: "admin@10.0.0.4's password: ")
 
         XCTAssertEqual(String(decoding: try XCTUnwrap(answer), as: UTF8.self), secret + "\n")
         XCTAssertTrue(channel.outcome.served)
@@ -53,7 +53,7 @@ final class PasswordChannelTests: XCTestCase {
         let answer = ask(
             socket: try socketPath(of: channel),
             nonce: String(repeating: "0", count: 64),
-            prompt: "morgan@10.0.0.4's password: ")
+            prompt: "admin@10.0.0.4's password: ")
 
         XCTAssertTrue(answer?.isEmpty ?? true)
         XCTAssertFalse(channel.outcome.served)
@@ -65,8 +65,8 @@ final class PasswordChannelTests: XCTestCase {
     func testOnlyAPasswordPromptIsAnswered() throws {
         let prompts = [
             "Are you sure you want to continue connecting (yes/no/[fingerprint])?",
-            "Enter passphrase for key '/Users/morgan/.ssh/id_ed25519': ",
-            "(morgan@10.0.0.4) Verification code: ",
+            "Enter passphrase for key '/Users/admin/.ssh/id_ed25519': ",
+            "(admin@10.0.0.4) Verification code: ",
             "",
         ]
         for prompt in prompts {
@@ -163,7 +163,7 @@ final class PasswordChannelTests: XCTestCase {
         let answer = ask(
             socket: try socketPath(of: channel),
             nonce: channel.nonce,
-            prompt: "morgan@10.0.0.4's password: ")
+            prompt: "admin@10.0.0.4's password: ")
 
         XCTAssertTrue(answer?.isEmpty ?? true, "the password must not be handed over")
         XCTAssertFalse(channel.outcome.served)
@@ -178,7 +178,7 @@ final class PasswordChannelTests: XCTestCase {
         let answer = ask(
             socket: try socketPath(of: channel),
             nonce: channel.nonce,
-            prompt: "morgan@10.0.0.4's password: ")
+            prompt: "admin@10.0.0.4's password: ")
 
         XCTAssertEqual(String(decoding: try XCTUnwrap(answer), as: UTF8.self), secret + "\n")
         XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
@@ -212,7 +212,7 @@ final class PasswordChannelTests: XCTestCase {
 
         let helper = Process()
         helper.executableURL = URL(fileURLWithPath: executable)
-        helper.arguments = ["morgan@10.0.0.4's password: "]
+        helper.arguments = ["admin@10.0.0.4's password: "]
         var environment = ProcessRunner.minimalEnvironment()
         environment.merge(channel.environmentAdditions()) { _, new in new }
         helper.environment = environment
@@ -239,7 +239,7 @@ final class PasswordChannelTests: XCTestCase {
     // MARK: - Prompt matching
 
     func testPromptMatching() {
-        XCTAssertTrue(AskpassProtocol.looksLikePasswordPrompt("morgan@host's password: "))
+        XCTAssertTrue(AskpassProtocol.looksLikePasswordPrompt("admin@host's password: "))
         XCTAssertTrue(AskpassProtocol.looksLikePasswordPrompt("Password:"))
         XCTAssertFalse(AskpassProtocol.looksLikePasswordPrompt(
             "Are you sure you want to continue connecting (yes/no)?"))
@@ -269,10 +269,10 @@ final class PasswordChannelTests: XCTestCase {
         let request = try XCTUnwrap(AskpassHelper.requestFromEnvironment(
             environment: [AskpassProtocol.socketEnvironmentKey: "/tmp/s",
                           AskpassProtocol.nonceEnvironmentKey: "abc"],
-            arguments: ["SSH-Wakey", "morgan@host's password: "]))
+            arguments: ["SSH-Wakey", "admin@host's password: "]))
         XCTAssertEqual(request.socketPath, "/tmp/s")
         XCTAssertEqual(request.nonce, "abc")
-        XCTAssertEqual(request.prompt, "morgan@host's password: ")
+        XCTAssertEqual(request.prompt, "admin@host's password: ")
     }
 }
 

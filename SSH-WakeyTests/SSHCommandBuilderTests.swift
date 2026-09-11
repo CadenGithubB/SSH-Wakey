@@ -4,7 +4,7 @@ import XCTest
 final class SSHCommandBuilderTests: XCTestCase {
 
     private let connection = SSHConnection(
-        name: "Studio Mac", username: "morgan", host: "10.0.0.4", port: 2222,
+        name: "Studio Mac", username: "admin", host: "10.0.0.4", port: 2222,
         extraArguments: "-v -o ServerAliveInterval=30", strictHostKeyChecking: true)
 
     private func masterArguments(_ connection: SSHConnection) throws -> [String] {
@@ -41,7 +41,7 @@ final class SSHCommandBuilderTests: XCTestCase {
     func testUsernameAndPortArePassedAsSeparateArguments() throws {
         let arguments = try masterArguments(connection)
         let userIndex = try XCTUnwrap(arguments.firstIndex(of: "-l"))
-        XCTAssertEqual(arguments[userIndex + 1], "morgan")
+        XCTAssertEqual(arguments[userIndex + 1], "admin")
         let portIndex = try XCTUnwrap(arguments.firstIndex(of: "-p"))
         XCTAssertEqual(arguments[portIndex + 1], "2222")
     }
@@ -99,7 +99,7 @@ final class SSHCommandBuilderTests: XCTestCase {
         XCTAssertEqual(arguments.last, "10.0.0.4")
 
         let userIndex = try XCTUnwrap(arguments.firstIndex(of: "-l"))
-        XCTAssertEqual(arguments[userIndex + 1], "morgan")
+        XCTAssertEqual(arguments[userIndex + 1], "admin")
     }
 
     func testUnlockingStillRefusesDangerousExtraArguments() {

@@ -11,12 +11,12 @@ final class SSHOutputClassifierTests: XCTestCase {
     }
 
     func testAuthenticationFailure() {
-        XCTAssertEqual(kind("morgan@10.0.0.4: Permission denied (publickey,password)."), .authentication)
+        XCTAssertEqual(kind("admin@10.0.0.4: Permission denied (publickey,password)."), .authentication)
         XCTAssertEqual(kind("Received disconnect from 10.0.0.4 port 22:2: Too many authentication failures"), .authentication)
     }
 
     func testAServerThatOnlyAcceptsKeys() {
-        XCTAssertEqual(kind("morgan@10.0.0.4: Permission denied (publickey)."), .passwordNotOffered)
+        XCTAssertEqual(kind("admin@10.0.0.4: Permission denied (publickey)."), .passwordNotOffered)
     }
 
     func testConnectionRefused() {
@@ -94,7 +94,7 @@ final class SSHOutputClassifierTests: XCTestCase {
         for line in [
             "debug1: Authentications that can continue: publickey,password,keyboard-interactive",
             #"debug1: Authenticated using "keyboard-interactive" with partial success."#,
-            "morgan@10.0.0.4: Permission denied (publickey,password).",
+            "admin@10.0.0.4: Permission denied (publickey,password).",
             "debug1: Next authentication method: password",
             "",
         ] {

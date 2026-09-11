@@ -17,7 +17,7 @@ final class EncryptedStoreTests: XCTestCase {
             .appendingPathComponent("SSH-WakeyVault-\(UUID().uuidString)", isDirectory: true)
         account = "test-\(UUID().uuidString)"
         store = makeStore()
-        store.add(SSHConnection(name: "Studio Mac", username: "cadenb", host: "192.168.0.228"))
+        store.add(SSHConnection(name: "Studio Mac", username: "admin", host: "192.168.1.24"))
     }
 
     override func tearDown() async throws {
@@ -40,7 +40,7 @@ final class EncryptedStoreTests: XCTestCase {
     func testItStartsUnencrypted() {
         XCTAssertFalse(store.isEncrypted)
         XCTAssertFalse(store.isLocked)
-        XCTAssertTrue(fileText.contains("192.168.0.228"))
+        XCTAssertTrue(fileText.contains("192.168.1.24"))
     }
 
     func testTurningItOnPutsNothingReadableOnDisk() throws {
@@ -51,9 +51,9 @@ final class EncryptedStoreTests: XCTestCase {
         XCTAssertEqual(store.connections.count, 1)
 
         let written = fileText
-        XCTAssertFalse(written.contains("192.168.0.228"), written)
+        XCTAssertFalse(written.contains("192.168.1.24"), written)
         XCTAssertFalse(written.contains("Studio Mac"))
-        XCTAssertFalse(written.contains("cadenb"))
+        XCTAssertFalse(written.contains("admin"))
         XCTAssertFalse(written.contains(passphrase))
         XCTAssertTrue(written.contains("vault"))
     }
@@ -61,7 +61,7 @@ final class EncryptedStoreTests: XCTestCase {
     func testAShortPassphraseIsRefusedAndChangesNothing() {
         XCTAssertThrowsError(try store.enableEncryption(passphrase: "short"))
         XCTAssertFalse(store.isEncrypted)
-        XCTAssertTrue(fileText.contains("192.168.0.228"), "the file must be left alone")
+        XCTAssertTrue(fileText.contains("192.168.1.24"), "the file must be left alone")
     }
 
     // MARK: - Reopening
@@ -72,7 +72,7 @@ final class EncryptedStoreTests: XCTestCase {
         let reopened = makeStore()
         XCTAssertFalse(reopened.isLocked)
         XCTAssertTrue(reopened.isEncrypted)
-        XCTAssertEqual(reopened.connections.first?.host, "192.168.0.228")
+        XCTAssertEqual(reopened.connections.first?.host, "192.168.1.24")
     }
 
     func testLosingTheKeychainKeyLocksRatherThanLoses() throws {
@@ -94,7 +94,7 @@ final class EncryptedStoreTests: XCTestCase {
 
         try locked.unlock(withPassphrase: passphrase)
         XCTAssertFalse(locked.isLocked)
-        XCTAssertEqual(locked.connections.first?.host, "192.168.0.228")
+        XCTAssertEqual(locked.connections.first?.host, "192.168.1.24")
 
         // A fresh Keychain key was stored, so the next launch needs no passphrase.
         XCTAssertNotNil(try KeychainKeyStore.load(account: account))
@@ -178,7 +178,7 @@ final class EncryptedStoreTests: XCTestCase {
         try store.disableEncryption(passphrase: passphrase)
 
         XCTAssertFalse(store.isEncrypted)
-        XCTAssertTrue(fileText.contains("192.168.0.228"))
+        XCTAssertTrue(fileText.contains("192.168.1.24"))
         XCTAssertNil(try KeychainKeyStore.load(account: account))
         XCTAssertEqual(makeStore().connections.count, 1)
     }
@@ -194,7 +194,7 @@ final class EncryptedStoreTests: XCTestCase {
         }
 
         XCTAssertTrue(store.isEncrypted)
-        XCTAssertFalse(fileText.contains("192.168.0.228"), "the file must still be sealed")
+        XCTAssertFalse(fileText.contains("192.168.1.24"), "the file must still be sealed")
         XCTAssertNotNil(try KeychainKeyStore.load(account: account), "the key must still be there")
     }
 
@@ -207,7 +207,7 @@ final class EncryptedStoreTests: XCTestCase {
         try store.export(to: destination, passphrase: passphrase)
 
         let exported = try String(contentsOf: destination, encoding: .utf8)
-        XCTAssertTrue(exported.contains("192.168.0.228"))
+        XCTAssertTrue(exported.contains("192.168.1.24"))
         XCTAssertTrue(exported.contains("Studio Mac"))
 
         let permissions = try FileManager.default
@@ -219,7 +219,7 @@ final class EncryptedStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
         let restored = ConnectionFileStore(directoryURL: copy)
         try FileManager.default.copyItem(at: destination, to: restored.fileURL)
-        XCTAssertEqual(try restored.load().first?.host, "192.168.0.228")
+        XCTAssertEqual(try restored.load().first?.host, "192.168.1.24")
     }
 
     func testExportNeedsThePassphraseOnceEncrypted() throws {
@@ -241,7 +241,7 @@ final class EncryptedStoreTests: XCTestCase {
         let destination = directory.appendingPathComponent("plain-export.json")
         try store.export(to: destination)
 
-        XCTAssertTrue(try String(contentsOf: destination, encoding: .utf8).contains("192.168.0.228"))
+        XCTAssertTrue(try String(contentsOf: destination, encoding: .utf8).contains("192.168.1.24"))
     }
 
     func testExportIsRefusedWhileLocked() throws {

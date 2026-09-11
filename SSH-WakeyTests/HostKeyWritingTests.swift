@@ -9,7 +9,7 @@ final class HostKeyWritingTests: XCTestCase {
     private var knownHosts: URL!
 
     private let realLine =
-        "192.168.0.228 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1kL2PmQk8vB3nZxq7cTfW5aYh0jRsGpXeMvNbUdOiK"
+        "192.168.1.24 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1kL2PmQk8vB3nZxq7cTfW5aYh0jRsGpXeMvNbUdOiK"
 
     override func setUpWithError() throws {
         directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -76,7 +76,7 @@ final class HostKeyWritingTests: XCTestCase {
     }
 
     func testSeveralKeysForOneHostAllGoIn() throws {
-        let second = "192.168.0.228 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDZ9kL2PmQk8vB3nZxq7cTfW"
+        let second = "192.168.1.24 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDZ9kL2PmQk8vB3nZxq7cTfW"
         try HostKeyService.trust([candidate(realLine), candidate(second)], at: knownHosts)
 
         XCTAssertEqual(contents.split(separator: "\n").count, 2)
@@ -87,7 +87,7 @@ final class HostKeyWritingTests: XCTestCase {
     func testRealKeyscanOutputIsAccepted() {
         for line in [
             realLine,
-            "[192.168.0.228]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1kL2PmQk8vB3nZxq7cTfW",
+            "[192.168.1.24]:2222 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1kL2PmQk8vB3nZxq7cTfW",
             "mac.local ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY=",
             "host sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29t",
         ] {

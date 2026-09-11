@@ -6,7 +6,7 @@ import XCTest
 final class NetworkScopeTests: XCTestCase {
 
     func testPrivateIPv4RangesAreLocal() {
-        for host in ["192.168.1.24", "192.168.0.228", "10.0.0.4", "10.255.255.255",
+        for host in ["192.168.1.24", "192.168.1.24", "10.0.0.4", "10.255.255.255",
                      "172.16.0.1", "172.31.255.254", "169.254.3.4", "127.0.0.1"] {
             XCTAssertTrue(NetworkScope.isLocal(host), host)
         }
@@ -51,7 +51,7 @@ final class NetworkScopeTests: XCTestCase {
             guidance: "Check the address.", detail: nil)
 
         let annotated = SSHSessionManager.annotated(
-            failure, with: AskpassChannel.Outcome(), host: "192.168.0.228")
+            failure, with: AskpassChannel.Outcome(), host: "192.168.1.24")
 
         XCTAssertTrue(annotated.suggestsLocalNetworkPermission)
         XCTAssertTrue(annotated.guidance?.contains("permission") ?? false, annotated.guidance ?? "")
@@ -78,7 +78,7 @@ final class NetworkScopeTests: XCTestCase {
             guidance: "Check the password.", detail: nil)
 
         let annotated = SSHSessionManager.annotated(
-            failure, with: AskpassChannel.Outcome(), host: "192.168.0.228")
+            failure, with: AskpassChannel.Outcome(), host: "192.168.1.24")
 
         XCTAssertFalse(annotated.suggestsLocalNetworkPermission)
     }

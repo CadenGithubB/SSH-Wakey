@@ -22,7 +22,7 @@ final class ConnectionPersistenceTests: XCTestCase {
 
     func testRoundTripPreservesEveryField() throws {
         let saved = [
-            SSHConnection(name: "Studio Mac", username: "morgan", host: "192.168.1.24",
+            SSHConnection(name: "Studio Mac", username: "admin", host: "192.168.1.24",
                           port: 2222, extraArguments: "-o ServerAliveInterval=30",
                           strictHostKeyChecking: true),
             SSHConnection(name: "Build box", username: "ci", host: "build.example.internal",
@@ -59,7 +59,7 @@ final class ConnectionPersistenceTests: XCTestCase {
     }
 
     func testSavedFileHoldsNoPasswordField() throws {
-        try store.save([SSHConnection(name: "A", username: "morgan", host: "h", port: 22)])
+        try store.save([SSHConnection(name: "A", username: "admin", host: "h", port: 22)])
         let text = try String(contentsOf: store.fileURL, encoding: .utf8).lowercased()
         XCTAssertFalse(text.contains("password"))
         XCTAssertFalse(text.contains("secret"))
@@ -78,7 +78,7 @@ final class ConnectionPersistenceTests: XCTestCase {
     func testFileWrittenByAnOlderBuildStillLoads() throws {
         // No port, no extraArguments, no strictHostKeyChecking key.
         let legacy = """
-        {"version":1,"connections":[{"name":"Old","username":"morgan","host":"10.0.0.9"}]}
+        {"version":1,"connections":[{"name":"Old","username":"admin","host":"10.0.0.9"}]}
         """
         try store.createDirectoryIfNeeded()
         try Data(legacy.utf8).write(to: store.fileURL)
@@ -113,23 +113,23 @@ final class ConnectionPersistenceTests: XCTestCase {
     }
 
     func testNormalizationTrimsWhitespaceBeforeSaving() throws {
-        let messy = SSHConnection(name: "  Studio  ", username: " morgan ", host: " 10.0.0.4 ",
+        let messy = SSHConnection(name: "  Studio  ", username: " admin ", host: " 10.0.0.4 ",
                                   port: 22, extraArguments: "  -v  ")
         try store.save([messy.normalized])
 
         let loaded = try XCTUnwrap(try store.load().first)
         XCTAssertEqual(loaded.name, "Studio")
-        XCTAssertEqual(loaded.username, "morgan")
+        XCTAssertEqual(loaded.username, "admin")
         XCTAssertEqual(loaded.host, "10.0.0.4")
         XCTAssertEqual(loaded.extraArguments, "-v")
     }
 
     func testDisplayDestinationShowsPortOnlyWhenItIsNotTheDefault() {
         XCTAssertEqual(
-            SSHConnection(name: "A", username: "morgan", host: "mac.local").displayDestination,
-            "morgan@mac.local")
+            SSHConnection(name: "A", username: "admin", host: "mac.local").displayDestination,
+            "admin@mac.local")
         XCTAssertEqual(
-            SSHConnection(name: "A", username: "morgan", host: "mac.local", port: 2222).displayDestination,
-            "morgan@mac.local:2222")
+            SSHConnection(name: "A", username: "admin", host: "mac.local", port: 2222).displayDestination,
+            "admin@mac.local:2222")
     }
 }

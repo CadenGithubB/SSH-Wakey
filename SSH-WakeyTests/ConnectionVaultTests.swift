@@ -10,7 +10,7 @@ final class ConnectionVaultTests: XCTestCase {
     private let passphrase = "correct-horse-battery-staple"
 
     private let connections = [
-        SSHConnection(name: "Studio Mac", username: "cadenb", host: "192.168.0.228",
+        SSHConnection(name: "Studio Mac", username: "admin", host: "192.168.1.24",
                       port: 22, createdAt: Date.stamp()),
         SSHConnection(name: "Build box", username: "ci", host: "build.example.internal", port: 2222),
     ]
@@ -68,7 +68,7 @@ final class ConnectionVaultTests: XCTestCase {
         let vault = try makeVault()
         let written = String(decoding: try JSONEncoder().encode(vault), as: UTF8.self)
 
-        for secret in ["Studio Mac", "cadenb", "192.168.0.228", "build.example.internal", passphrase] {
+        for secret in ["Studio Mac", "admin", "192.168.1.24", "build.example.internal", passphrase] {
             XCTAssertFalse(written.contains(secret), secret)
         }
     }

@@ -5,7 +5,7 @@ final class ValidationTests: XCTestCase {
 
     private func connection(
         name: String = "Studio Mac",
-        username: String = "morgan",
+        username: String = "admin",
         host: String = "10.0.0.4",
         port: Int = 22,
         extra: String = ""
@@ -40,13 +40,13 @@ final class ValidationTests: XCTestCase {
     }
 
     func testUsernamesThatCouldBeMisreadAreRejected() {
-        for candidate in ["-oProxyCommand=x", "mor gan", "morgan@host", "user:name", "a/b", "tab\there"] {
+        for candidate in ["-oProxyCommand=x", "mor gan", "admin@host", "user:name", "a/b", "tab\there"] {
             XCTAssertFalse(ConnectionValidator.isValidUsername(candidate), candidate)
         }
     }
 
     func testOrdinaryUsernamesAreAccepted() {
-        for candidate in ["morgan", "ci-runner", "user_1", "root", "admin.local"] {
+        for candidate in ["admin", "ci-runner", "user_1", "root", "admin.local"] {
             XCTAssertTrue(ConnectionValidator.isValidUsername(candidate), candidate)
         }
     }
@@ -80,6 +80,6 @@ final class ValidationTests: XCTestCase {
 
     func testValidationIgnoresSurroundingWhitespace() {
         XCTAssertTrue(ConnectionValidator.isValid(
-            connection(name: " Studio ", username: " morgan ", host: " 10.0.0.4 ")))
+            connection(name: " Studio ", username: " admin ", host: " 10.0.0.4 ")))
     }
 }

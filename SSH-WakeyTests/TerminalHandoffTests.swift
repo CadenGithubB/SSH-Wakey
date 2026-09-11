@@ -4,7 +4,7 @@ import XCTest
 final class TerminalHandoffTests: XCTestCase {
 
     private let connection = SSHConnection(
-        name: "Studio Mac", username: "morgan", host: "10.0.0.4", port: 2222)
+        name: "Studio Mac", username: "admin", host: "10.0.0.4", port: 2222)
 
     func testTheScriptAttachesToTheExistingSession() {
         let script = TerminalHandoff.scriptContents(for: connection, controlPath: "/tmp/ctl")
@@ -43,7 +43,7 @@ final class TerminalHandoffTests: XCTestCase {
 
     func testEveryValueInTheScriptIsQuoted() {
         let awkward = SSHConnection(
-            name: "Odd", username: "morgan", host: "10.0.0.4", port: 22)
+            name: "Odd", username: "admin", host: "10.0.0.4", port: 22)
         let script = TerminalHandoff.scriptContents(for: awkward, controlPath: "/tmp/a b/ctl")
         XCTAssertTrue(script.contains("'ControlPath=/tmp/a b/ctl'"))
         XCTAssertTrue(script.contains("'10.0.0.4'"))

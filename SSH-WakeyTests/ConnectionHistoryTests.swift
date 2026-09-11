@@ -18,7 +18,7 @@ final class ConnectionHistoryTests: XCTestCase {
     }
 
     private func makeConnection() -> SSHConnection {
-        SSHConnection(name: "Studio Mac", username: "cadenb", host: "192.168.0.228")
+        SSHConnection(name: "Studio Mac", username: "admin", host: "192.168.1.24")
     }
 
     func testAddingStampsBothDates() throws {
@@ -45,7 +45,7 @@ final class ConnectionHistoryTests: XCTestCase {
         XCTAssertEqual(saved.revisions.count, 1)
 
         let summary = try XCTUnwrap(saved.revisions.first?.summary)
-        XCTAssertTrue(summary.contains("Host: 192.168.0.228 → 10.0.0.9"), summary)
+        XCTAssertTrue(summary.contains("Host: 192.168.1.24 → 10.0.0.9"), summary)
         XCTAssertTrue(summary.contains("Port: 22 → 2222"), summary)
     }
 
@@ -88,7 +88,7 @@ final class ConnectionHistoryTests: XCTestCase {
     func testDatesAndHistorySurviveASaveAndReload() throws {
         store.add(makeConnection())
         var edited = try XCTUnwrap(store.connections.first)
-        edited.username = "morgan"
+        edited.username = "admin"
         store.update(edited)
         let before = try XCTUnwrap(store.connections.first)
 
@@ -111,7 +111,7 @@ final class ConnectionHistoryTests: XCTestCase {
         let fileStore = ConnectionFileStore(directoryURL: directory)
         try fileStore.createDirectoryIfNeeded()
         try Data("""
-        {"version":1,"connections":[{"name":"Old","username":"morgan","host":"10.0.0.9"}]}
+        {"version":1,"connections":[{"name":"Old","username":"admin","host":"10.0.0.9"}]}
         """.utf8).write(to: fileStore.fileURL)
 
         let loaded = try XCTUnwrap(fileStore.load().first)
