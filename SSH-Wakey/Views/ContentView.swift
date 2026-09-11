@@ -312,7 +312,20 @@ struct ContentView: View {
             storedColumnLayout = Data()
             return
         }
-        storedColumnLayout = Self.strippingWidths(from: encoded) ?? encoded
+        let stripped = Self.strippingWidths(from: encoded) ?? encoded
+
+        // Only write when something worth remembering actually changed.
+        //
+        // The table writes its recomputed widths back into the customization
+        // whenever it lays out, which is every time the contents change. Each
+        // of those used to reach the line below, and writing to @AppStorage
+        // invalidates this whole view, sheet presentation and all. Adding a row
+        // was enough to start that churn, which is why a sheet opened just
+        // afterwards could appear and then vanish while the window stayed in
+        // its modal state. Widths are stripped before saving, so a width-only
+        // change produces identical bytes and is dropped here.
+        guard stripped != storedColumnLayout else { return }
+        storedColumnLayout = stripped
     }
 
     /// Removes the per-column widths before the layout is saved.

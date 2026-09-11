@@ -108,3 +108,66 @@ final class ColumnWidthTests: XCTestCase {
         XCTAssertNil(ContentView.strippingWidths(from: Data("{}".utf8)))
     }
 }
+
+/// The saved layout is written to `@AppStorage`, and every write invalidates the
+/// view that presents sheets. Writing on changes that carry no information is
+/// what made a sheet flicker away after a row was added.
+final class ColumnLayoutWriteTests: XCTestCase {
+
+    private func stripped(_ json: String) -> Data? {
+        ContentView.strippingWidths(from: Data(json.utf8))
+    }
+
+    /// Two layouts differing only in width must reduce to the same bytes, which
+    /// is what lets the save be skipped.
+    func testAWidthOnlyChangeIsIndistinguishableOnceStripped() throws {
+        let before = try XCTUnwrap(stripped("""
+        {"perColumnState":[
+          {"base":{"explicit":{"_0":"name"}}},
+          {"currentWidth":150,"visibility":{"automatic":{}}}
+        ]}
+        """))
+        let after = try XCTUnwrap(stripped("""
+        {"perColumnState":[
+          {"base":{"explicit":{"_0":"name"}}},
+          {"currentWidth":186,"visibility":{"automatic":{}}}
+        ]}
+        """))
+
+        XCTAssertEqual(before, after, "a width-only change must not reach user defaults")
+    }
+
+    func testHidingAColumnIsStillDistinguishable() throws {
+        let shown = try XCTUnwrap(stripped("""
+        {"perColumnState":[
+          {"base":{"explicit":{"_0":"port"}}},
+          {"currentWidth":44,"visibility":{"automatic":{}}}
+        ]}
+        """))
+        let hidden = try XCTUnwrap(stripped("""
+        {"perColumnState":[
+          {"base":{"explicit":{"_0":"port"}}},
+          {"currentWidth":44,"visibility":{"hidden":{}}}
+        ]}
+        """))
+
+        XCTAssertNotEqual(shown, hidden, "a visibility change must still be saved")
+    }
+
+    func testReorderingIsStillDistinguishable() throws {
+        let one = try XCTUnwrap(stripped("""
+        {"perColumnState":[
+          {"base":{"explicit":{"_0":"name"}}},{"currentWidth":150},
+          {"base":{"explicit":{"_0":"host"}}},{"currentWidth":160}
+        ]}
+        """))
+        let other = try XCTUnwrap(stripped("""
+        {"perColumnState":[
+          {"base":{"explicit":{"_0":"host"}}},{"currentWidth":160},
+          {"base":{"explicit":{"_0":"name"}}},{"currentWidth":150}
+        ]}
+        """))
+
+        XCTAssertNotEqual(one, other, "an order change must still be saved")
+    }
+}
