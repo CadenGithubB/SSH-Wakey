@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var sheet: SheetKind?
     @State private var removalTarget: SSHConnection?
     @State private var showsColumnPicker = false
+    @State private var metrics = HeaderMetrics()
 
     /// What Connect does. Unlocking is the default, because getting a machine
     /// past its FileVault screen is the job this app exists for, and that needs
@@ -66,6 +67,7 @@ struct ContentView: View {
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.sessions = sessions
             restoreColumnLayout()
+            Task { await SSHSessionManager.sweepAbandonedSessions() }
         }
         .onChange(of: columns) { _, layout in saveColumnLayout(layout) }
         .sheet(item: $sheet, content: sheetContent)
@@ -120,7 +122,11 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
         } else {
-            table.overlay(alignment: .topLeading) { columnsMenu }
+            table.overlay(alignment: .topLeading) {
+                columnsMenu
+                    .offset(x: (metrics.statusColumnCenterX ?? Column.status.idealWidth / 2)
+                            - Column.status.idealWidth / 2)
+            }
         }
     }
 
@@ -156,8 +162,7 @@ struct ContentView: View {
 
                 Divider()
 
-                Text("Name, Username, Host and the dates always show, because a row that cannot "
-                     + "tell you which machine it is is not worth showing.")
+                Text("Name, Username, Host and the dates always show.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -245,6 +250,8 @@ struct ContentView: View {
                 }
                 Divider()
                 Button("Remove…", role: .destructive) { removalTarget = connection }
+                    .disabled(sessions.state(for: id).isConnected
+                              || sessions.state(for: id).isConnecting)
             }
         } primaryAction: { ids in
             // Double-click.
@@ -460,8 +467,8 @@ struct ContentView: View {
         case .unlock:
             PassphraseSheet(
                 purpose: .unlock,
-                onSubmit: { passphrase in
-                    try store.unlock(withPassphrase: passphrase)
+                onSubmit: { entry in
+                    try store.unlock(withPassphrase: entry.new)
                     sheet = nil
                 },
                 onCancel: { sheet = nil })
@@ -615,4 +622,65 @@ enum Column: String, CaseIterable, Identifiable {
     /// ideal width. That is what keeps the default layout from scrolling
     /// sideways, whatever the table decides to do with the widths.
     static var minimumWindowWidth: CGFloat { totalIdealWidth + tableChrome }
+}
+
+
+/// Where the table actually put its first column.
+///
+/// SwiftUI does not expose a `Table`'s internal geometry, and the first column
+/// does not begin at the table's leading edge: there is an inset in front of it.
+/// Guessing that offset put the header button visibly off-centre, so it is
+/// measured instead.
+@MainActor
+@Observable
+final class HeaderMetrics {
+    /// The horizontal centre of the first column, in the table's own
+    /// coordinates. Nil until the table has been laid out.
+    var statusColumnCenterX: CGFloat?
+}
+
+/// Fills the table, finds the `NSTableView` underneath it, and asks AppKit
+/// where the first column is.
+///
+/// It has to live in an overlay rather than inside a cell. A representable
+/// placed in a `TableColumn`'s content is never instantiated at all, so nothing
+/// there can measure anything.
+private struct TableGeometryProbe: NSViewRepresentable {
+    let metrics: HeaderMetrics
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { measure(from: view) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { measure(from: nsView) }
+    }
+
+    private func measure(from view: NSView) {
+        guard let table = tableNear(view) else { return }
+        // convert(_:from:) settles the inset, any content inset and the scroll
+        // position together, rather than assuming all three are zero.
+        let centre = view.convert(table.rect(ofColumn: 0), from: table).midX
+        guard centre > 0, metrics.statusColumnCenterX != centre else { return }
+        metrics.statusColumnCenterX = centre
+    }
+
+    private func tableNear(_ view: NSView) -> NSTableView? {
+        var ancestor: NSView? = view
+        while let current = ancestor {
+            if let found = firstTable(in: current) { return found }
+            ancestor = current.superview
+        }
+        return nil
+    }
+
+    private func firstTable(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView, table.numberOfColumns > 0 { return table }
+        for subview in view.subviews {
+            if let found = firstTable(in: subview) { return found }
+        }
+        return nil
+    }
 }

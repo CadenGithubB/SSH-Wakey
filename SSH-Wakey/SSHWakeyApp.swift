@@ -9,7 +9,7 @@ struct SSHWakeyApp: App {
 
     // Owned here rather than in the window, because the Settings scene works on
     // the same store.
-    @State private var store = ConnectionStore()
+    @State private var store = ConnectionStore.forCurrentEnvironment()
     @State private var sessions = SSHSessionManager()
 
     var body: some Scene {

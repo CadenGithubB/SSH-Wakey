@@ -71,16 +71,16 @@ struct SecuritySettingsView: View {
         .sheet(item: $sheet) { purpose in
             PassphraseSheet(
                 purpose: purpose,
-                onSubmit: { passphrase in
+                onSubmit: { entry in
                     switch purpose {
                     case .create:
-                        try store.enableEncryption(passphrase: passphrase)
+                        try store.enableEncryption(passphrase: entry.new)
                         announce("Your connections are encrypted now.")
                     case .change:
-                        try store.changePassphrase(to: passphrase)
+                        try store.changePassphrase(from: entry.current ?? "", to: entry.new)
                         announce("The recovery passphrase has been changed.")
                     case .unlock:
-                        try store.unlock(withPassphrase: passphrase)
+                        try store.unlock(withPassphrase: entry.new)
                         announce("Unlocked, and a fresh Keychain key has been stored.")
                     }
                     sheet = nil
@@ -102,8 +102,9 @@ struct SecuritySettingsView: View {
     }
 
     private static let plainExplanation = """
-    The file holds names, usernames, addresses and ports. No passwords and no keys. Only your \
-    account can read it, and FileVault encrypts it whenever this Mac is off or locked.
+    Display names, usernames, hostnames or IP addresses, and ports, all in plain text. No \
+    passwords and no keys. Only your account can read the file, and FileVault encrypts it whenever \
+    this Mac is off or locked.
     """
 
     private static let encryptedExplanation = """

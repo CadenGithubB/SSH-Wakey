@@ -147,6 +147,11 @@ a one-time event rather than a permanent downgrade to typing a passphrase.
 
 ### The limits of it
 
+- **Changing the passphrase asks for the current one.** The app already holds
+  the data key and could change it without asking. It asks anyway, because
+  otherwise a moment at an unlocked app would let someone set a passphrase of
+  their own and read the file at leisure later, turning a brief lapse into
+  lasting access.
 - **A passphrase you cannot produce is a file you cannot open.** There is no
   back door and no reset. Export before you need it, and keep the passphrase in a
   password manager.
@@ -154,8 +159,10 @@ a one-time event rather than a permanent downgrade to typing a passphrase.
   while the app is open can read the connection list out of the app, and on
   macOS 15 and earlier, so can anything that can read the Keychain item.
 - **The Keychain item is tied to the app's signature.** An ad-hoc signed build
-  changes signature every time it is rebuilt, so macOS may ask you to allow
-  access again after a rebuild. That prompt is expected.
+  gets a new signature every time it is rebuilt, so macOS asks you to allow
+  access again after each rebuild, and "Always Allow" only holds until the next
+  one. That is expected while you are changing the code, and stops once you
+  settle on a build. A Developer ID signature would make it a single prompt.
 - **An export is plain text.** It is written `0600`, and after that it is an
   ordinary file with ordinary risks.
 

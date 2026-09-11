@@ -140,13 +140,37 @@ final class EncryptedStoreTests: XCTestCase {
 
     func testChangingThePassphraseRetiresTheOldOne() throws {
         try store.enableEncryption(passphrase: passphrase)
-        try store.changePassphrase(to: "a-different-long-passphrase")
+        try store.changePassphrase(from: passphrase, to: "a-different-long-passphrase")
         try KeychainKeyStore.delete(account: account)
 
         let locked = makeStore()
         XCTAssertThrowsError(try locked.unlock(withPassphrase: passphrase))
         XCTAssertNoThrow(try locked.unlock(withPassphrase: "a-different-long-passphrase"))
         XCTAssertEqual(locked.connections.count, 1)
+    }
+
+    /// The app holds the data key, so it could change the passphrase without
+    /// asking. Asking stops a moment at an unlocked app becoming lasting access.
+    func testChangingThePassphraseNeedsTheCurrentOne() throws {
+        try store.enableEncryption(passphrase: passphrase)
+
+        XCTAssertThrowsError(
+            try store.changePassphrase(from: "not-the-passphrase", to: "a-new-long-passphrase")
+        ) {
+            XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
+        }
+
+        // The old one still works, so nothing was changed on the way out.
+        try KeychainKeyStore.delete(account: account)
+        XCTAssertNoThrow(try makeStore().unlock(withPassphrase: passphrase))
+    }
+
+    func testAShortReplacementPassphraseIsRefused() throws {
+        try store.enableEncryption(passphrase: passphrase)
+        XCTAssertThrowsError(try store.changePassphrase(from: passphrase, to: "short")) {
+            XCTAssertEqual($0 as? VaultError,
+                           .passphraseTooShort(VaultCrypto.minimumPassphraseLength))
+        }
     }
 
     func testTurningItOffRestoresAPlainFileAndRemovesTheKey() throws {

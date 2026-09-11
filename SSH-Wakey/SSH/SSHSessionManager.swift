@@ -453,6 +453,56 @@ final class SSHSessionManager {
         Bundle.main.executablePath ?? CommandLine.arguments.first ?? "/usr/bin/false"
     }
 
+    static let ownerFileName = "owner"
+
+    /// Shuts down sessions left behind by an app that was killed rather than
+    /// quit.
+    ///
+    /// Quitting disconnects everything. A crash or a Force Quit does not: the
+    /// `ssh` master is reparented and carries on holding an authenticated
+    /// connection that nothing can see, reach or close, with a control socket
+    /// any process running as this user could still have attached to. This
+    /// clears those on the next launch.
+    ///
+    /// A directory whose owning process is still alive belongs to another
+    /// running copy of the app and is left alone.
+    static func sweepAbandonedSessions() async {
+        let parent = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("SSH-Wakey", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: parent, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+
+        for entry in entries where isAbandoned(entry) {
+            let control = entry.appendingPathComponent("ctl")
+            if FileManager.default.fileExists(atPath: control.path) {
+                // ssh looks at the control socket before the destination, so
+                // the name here is only a placeholder.
+                _ = try? await ProcessRunner.run(
+                    executable: SSHCommandBuilder.sshExecutable,
+                    arguments: ["-o", "ControlPath=\(control.path)", "-O", "exit",
+                                "abandoned-session"],
+                    timeout: 5)
+            }
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
+
+    static func isAbandoned(_ directory: URL) -> Bool {
+        let owner = directory.appendingPathComponent(ownerFileName)
+        guard let text = try? String(contentsOf: owner, encoding: .utf8),
+              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            // No owner recorded: a password-channel folder, or one from an
+            // older build. Only cleared once it is old enough that it cannot
+            // belong to an attempt happening right now.
+            let age = (try? directory.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate.map { Date().timeIntervalSince($0) }
+            return (age ?? 0) > 3600
+        }
+        if pid == getpid() { return false }
+        // Alive means another copy of the app owns it. EPERM also means alive.
+        return kill(pid, 0) != 0 && errno == ESRCH
+    }
+
     private static func makeSessionDirectory() throws -> URL {
         let parent = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("SSH-Wakey", isDirectory: true)
@@ -461,6 +511,11 @@ final class SSHSessionManager {
             at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+
+        // Records which app process owns this, so a later launch can tell a
+        // session abandoned by a crash from one belonging to a running copy.
+        try? Data(String(getpid()).utf8)
+            .write(to: directory.appendingPathComponent(ownerFileName))
         return directory
     }
 }

@@ -40,6 +40,24 @@ final class ConnectionStore {
         load()
     }
 
+    /// The store the app should use on launch.
+    ///
+    /// Under XCTest the app is launched as the test host, and it must not read
+    /// the real saved connections or the real Keychain item. A rebuilt ad-hoc
+    /// binary has a different signature, so macOS puts up a modal Keychain
+    /// prompt that nothing can answer, and the whole test run hangs behind it.
+    /// Tests should not depend on what happens to be on the machine either.
+    static func forCurrentEnvironment() -> ConnectionStore {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil else {
+            return ConnectionStore()
+        }
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("SSH-WakeyTestHost-\(UUID().uuidString)", isDirectory: true)
+        return ConnectionStore(
+            fileStore: ConnectionFileStore(directoryURL: scratch),
+            keychainAccount: "test-host-\(UUID().uuidString)")
+    }
+
     func load() {
         do {
             switch try fileStore.read() {
@@ -207,12 +225,23 @@ final class ConnectionStore {
         storageError = nil
     }
 
-    /// Swaps the recovery passphrase. The contents are not re-encrypted,
-    /// because only the wrapping of the data key changes.
-    func changePassphrase(to passphrase: String) throws {
-        guard let vault, let dataKey else { return }
+    /// Swaps the recovery passphrase, after proving the current one is known.
+    ///
+    /// The app already holds the data key, so it could change the passphrase
+    /// without asking. It asks anyway: otherwise anyone who reached an unlocked
+    /// app for a moment could set a passphrase of their own and read the file
+    /// at leisure later, turning a brief lapse into lasting access.
+    ///
+    /// The contents are not re-encrypted. Only the wrapping of the data key
+    /// changes.
+    func changePassphrase(from current: String, to replacement: String) throws {
+        guard let vault, dataKey != nil else { return }
+
+        // Throws .wrongPassphrase if it does not open the recovery slot.
+        let verified = try VaultCrypto.dataKey(from: vault, passphrase: current)
+
         let updated = try VaultCrypto.replacingPassphrase(
-            in: vault, dataKey: dataKey, with: passphrase)
+            in: vault, dataKey: verified, with: replacement)
         try fileStore.save(updated)
         self.vault = updated
     }
@@ -226,7 +255,6 @@ final class ConnectionStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(ConnectionFileStore.Document(connections: connections))
-        try data.write(to: url, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try ProtectedFile.write(data, to: url)
     }
 }

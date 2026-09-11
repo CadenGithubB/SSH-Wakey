@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// One public key offered by a server, with the fingerprint a person can read
@@ -72,28 +73,86 @@ enum HostKeyService {
     }
 
     /// Appends approved keys to `~/.ssh/known_hosts`, creating it if needed.
-    static func trust(_ candidates: [HostKeyCandidate]) throws {
+    ///
+    /// Appended, not rewritten. Reading the file, adding a line and writing the
+    /// whole thing back would discard anything ssh recorded in between, replace
+    /// the file with a new inode, drop extended attributes, and turn a symlinked
+    /// known_hosts into a regular file. An `O_APPEND` write does none of that.
+    static func trust(_ candidates: [HostKeyCandidate], at url: URL = knownHostsURL) throws {
         guard !candidates.isEmpty else { return }
-        let url = knownHostsURL
-        let directory = url.deletingLastPathComponent()
 
-        do {
-            if !FileManager.default.fileExists(atPath: directory.path) {
+        for candidate in candidates where !isWellFormed(candidate.knownHostsLine) {
+            throw HostKeyError.notWritten(
+                "ssh-keyscan returned something that is not a host key line, so nothing was added.")
+        }
+
+        let directory = url.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            do {
                 try FileManager.default.createDirectory(
                     at: directory, withIntermediateDirectories: true,
                     attributes: [.posixPermissions: 0o700])
+            } catch {
+                throw HostKeyError.notWritten(error.localizedDescription)
             }
-
-            var existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            if !existing.isEmpty && !existing.hasSuffix("\n") { existing += "\n" }
-            existing += candidates.map(\.knownHostsLine).joined(separator: "\n") + "\n"
-
-            try existing.write(to: url, atomically: true, encoding: .utf8)
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch {
-            throw HostKeyError.notWritten(error.localizedDescription)
         }
+
+        var text = candidates.map(\.knownHostsLine).joined(separator: "\n") + "\n"
+        if endsWithoutNewline(url) { text = "\n" + text }
+
+        let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
+        guard descriptor >= 0 else {
+            throw HostKeyError.notWritten(String(cString: strerror(errno)))
+        }
+        defer { close(descriptor) }
+
+        let payload = Array(text.utf8)
+        var offset = 0
+        while offset < payload.count {
+            let written = payload.withUnsafeBytes { bytes in
+                Darwin.write(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+            }
+            if written > 0 {
+                offset += written
+                continue
+            }
+            if written < 0 && errno == EINTR { continue }
+            throw HostKeyError.notWritten(String(cString: strerror(errno)))
+        }
+    }
+
+    /// True when a new entry would otherwise be joined onto the last line.
+    private static func endsWithoutNewline(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd(), size > 0 else { return false }
+        try? handle.seek(toOffset: size - 1)
+        return (try? handle.read(upToCount: 1)) != Data([0x0A])
+    }
+
+    /// A host pattern, a key type and base64 key material, on one line.
+    ///
+    /// The lines come from another machine by way of ssh-keyscan, and they are
+    /// about to be appended to the file that decides which servers are trusted.
+    /// Nothing that does not look exactly like an entry goes in.
+    static func isWellFormed(_ line: String) -> Bool {
+        guard !line.isEmpty, line.utf8.count <= 8192 else { return false }
+        guard !line.unicodeScalars.contains(where: { $0.properties.generalCategory == .control })
+        else { return false }
+
+        // ssh-keyscan writes exactly three fields. Anything else is not what
+        // this is for, and the file is too important to be lenient with.
+        let fields = line.split(separator: " ").map(String.init)
+        guard fields.count == 3 else { return false }
+
+        let keyType = fields[1]
+        guard keyType.hasPrefix("ssh-") || keyType.hasPrefix("ecdsa-") || keyType.hasPrefix("sk-")
+        else { return false }
+
+        let material = fields[2]
+        let base64 = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+        return !material.isEmpty && material.unicodeScalars.allSatisfy(base64.contains)
     }
 
     struct Detail: Equatable {

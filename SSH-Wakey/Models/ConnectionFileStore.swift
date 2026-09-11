@@ -1,4 +1,72 @@
+import Darwin
 import Foundation
+
+/// Writes a file that is never readable by anyone else, not even briefly.
+///
+/// `Data.write(options: .atomic)` creates its temporary file using the process
+/// umask, normally leaving it mode 0644, and only a later `chmod` narrows it.
+/// That is a window in which the contents are world readable. Creating the
+/// temporary file with the mode it should already have, then renaming it into
+/// place, closes the window without giving up atomicity.
+enum ProtectedFile {
+
+    enum WriteError: LocalizedError {
+        case failed(String, String)
+
+        var errorDescription: String? {
+            switch self {
+            case .failed(let action, let reason):
+                return "Could not \(action): \(reason)"
+            }
+        }
+    }
+
+    static func write(_ data: Data, to url: URL, mode: mode_t = 0o600) throws {
+        let temporary = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString.prefix(8))")
+
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, mode)
+        guard descriptor >= 0 else {
+            throw WriteError.failed("create \(url.lastPathComponent)", String(cString: strerror(errno)))
+        }
+
+        var complete = true
+        var failure = ""
+        data.withUnsafeBytes { bytes in
+            var offset = 0
+            while offset < bytes.count {
+                let written = Darwin.write(
+                    descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+                if written > 0 {
+                    offset += written
+                    continue
+                }
+                if written < 0 && errno == EINTR { continue }
+                complete = false
+                failure = String(cString: strerror(errno))
+                break
+            }
+        }
+        // On disk before the rename, so a crash cannot leave an empty file
+        // standing where the real one used to be.
+        if complete, fsync(descriptor) != 0 {
+            complete = false
+            failure = String(cString: strerror(errno))
+        }
+        close(descriptor)
+
+        guard complete else {
+            unlink(temporary.path)
+            throw WriteError.failed("write \(url.lastPathComponent)", failure)
+        }
+        guard rename(temporary.path, url.path) == 0 else {
+            let reason = String(cString: strerror(errno))
+            unlink(temporary.path)
+            throw WriteError.failed("replace \(url.lastPathComponent)", reason)
+        }
+        chmod(url.path, mode)
+    }
+}
 
 /// Reads and writes the saved connection list.
 ///
@@ -123,8 +191,7 @@ struct ConnectionFileStore: Sendable {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(document)
 
-        try data.write(to: fileURL, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        try ProtectedFile.write(data, to: fileURL)
     }
 
     func createDirectoryIfNeeded() throws {

@@ -29,6 +29,10 @@ struct PassphraseSheet: View {
 
         var wantsConfirmation: Bool { self != .unlock }
 
+        /// Replacing a passphrase should prove you know the one being replaced,
+        /// the same as any other password change.
+        var wantsCurrent: Bool { self == .change }
+
         var explanation: String {
             switch self {
             case .create, .change:
@@ -52,18 +56,29 @@ struct PassphraseSheet: View {
         }
     }
 
+    /// What the sheet collected.
+    struct Entry {
+        /// Only asked for when replacing an existing passphrase.
+        var current: String?
+        var new: String
+    }
+
     let purpose: Purpose
     /// Throws to keep the sheet open and show what went wrong.
-    var onSubmit: (String) throws -> Void
+    var onSubmit: (Entry) throws -> Void
     var onCancel: () -> Void
 
+    @State private var current = ""
     @State private var passphrase = ""
     @State private var confirmation = ""
     @State private var problem: String?
-    @FocusState private var focused: Bool
+    private enum Field: Hashable { case current, new }
+
+    @FocusState private var focused: Field?
 
     private var isComplete: Bool {
         guard !passphrase.isEmpty else { return false }
+        if purpose.wantsCurrent && current.isEmpty { return false }
         return purpose.wantsConfirmation ? !confirmation.isEmpty : true
     }
 
@@ -82,10 +97,17 @@ struct PassphraseSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if purpose.wantsCurrent {
+                    SecureField("Current passphrase", text: $current)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($focused, equals: .current)
+                        .onSubmit(submit)
+                }
+
                 SecureField(purpose == .unlock ? "Recovery passphrase" : "New passphrase",
                             text: $passphrase)
                     .textFieldStyle(.roundedBorder)
-                    .focused($focused)
+                    .focused($focused, equals: .new)
                     .onSubmit(submit)
 
                 if purpose.wantsConfirmation {
@@ -112,6 +134,7 @@ struct PassphraseSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") {
+                    current = ""
                     passphrase = ""
                     confirmation = ""
                     onCancel()
@@ -125,7 +148,7 @@ struct PassphraseSheet: View {
             .padding(16)
         }
         .frame(width: 440)
-        .onAppear { focused = true }
+        .onAppear { focused = purpose.wantsCurrent ? .current : .new }
     }
 
     private func submit() {
@@ -142,7 +165,8 @@ struct PassphraseSheet: View {
         }
 
         do {
-            try onSubmit(passphrase)
+            try onSubmit(Entry(current: purpose.wantsCurrent ? current : nil, new: passphrase))
+            current = ""
             passphrase = ""
             confirmation = ""
         } catch {

@@ -425,13 +425,13 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             181 tests
+SSH-WakeyTests/             202 tests
 ```
 
 ## Tests
 
-181 unit tests covering persistence and its file permissions, timestamps, change
-history, the encrypted file and both ways into it, the per-row privacy toggle, which columns may be hidden and
+202 unit tests covering persistence and its file permissions, timestamps, change
+history, the encrypted file and both ways into it, appending to known_hosts, the per-row privacy toggle, which columns may be hidden and
 how the table layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the
 password buffer, the Terminal handoff script, and the password channel itself. The channel tests run the real client code against the real
