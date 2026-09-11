@@ -49,6 +49,42 @@ own signing identity and notarisation.
 
 ---
 
+## Installing it
+
+```bash
+./Scripts/install.sh
+```
+
+Builds the Release configuration and puts the app in `/Applications`. Release is
+the one to install: it has the Hardened Runtime on and no `get-task-allow`
+entitlement, so nothing running as you can attach a debugger and read the
+password out of memory. Debug keeps both so Xcode can attach, which is the right
+trade for development and the wrong one for daily use.
+
+Run it again to update. It replaces the bundle rather than merging into it, so a
+renamed or deleted file cannot leave something stale behind, and it refuses to
+touch `/Applications/SSH-Wakey.app` if that turns out to be some other app.
+
+`spctl` will report the installed app as rejected. That is expected and it does
+not stop it opening. Gatekeeper only assesses an app that arrived with a
+quarantine flag, which is attached to downloads and AirDrops. An app you built
+and copied locally has no such flag, so it is never assessed.
+
+### Moving it to another Mac
+
+```bash
+./Scripts/make-dmg.sh
+```
+
+Writes `build/SSH-Wakey.dmg`. Be aware of what that means, though: the app is
+signed ad-hoc and is not notarised, so on any Mac that did not build it the
+quarantine flag will be there and Gatekeeper will refuse it outright. Getting
+past that means right-clicking and choosing Open, or stripping the flag by hand,
+and teaching people to do either is a bad habit. If you want to hand this to
+someone else, sign it with a Developer ID and notarise it first.
+
+---
+
 ## Using it
 
 1. **Add** a connection: display name, username, host or IP, port, and any extra
