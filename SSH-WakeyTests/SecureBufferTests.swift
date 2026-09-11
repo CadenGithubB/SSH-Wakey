@@ -31,6 +31,15 @@ final class SecureBufferTests: XCTestCase {
         buffer.wipe()
     }
 
+    /// The plaintext should never be eligible to be written to swap.
+    func testThePasswordPagesArePinnedInMemory() {
+        let buffer = SecureBuffer("hunter2")
+        XCTAssertTrue(buffer.isMemoryLocked, "mlock should succeed for a buffer this small")
+
+        buffer.wipe()
+        XCTAssertFalse(buffer.isMemoryLocked, "the pages must be released along with the memory")
+    }
+
     func testMultiByteCharactersSurviveIntact() {
         let password = "pässwörd–✓"
         let buffer = SecureBuffer(password)

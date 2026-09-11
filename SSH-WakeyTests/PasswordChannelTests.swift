@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import SSH_Wakey
 
@@ -8,7 +9,7 @@ final class PasswordChannelTests: XCTestCase {
     private let secret = "correct horse battery staple"
 
     private func socketPath(of channel: AskpassChannel) throws -> String {
-        let environment = channel.environmentAdditions(helperPath: "/usr/bin/false")
+        let environment = channel.environmentAdditions()
         return try XCTUnwrap(environment[AskpassProtocol.socketEnvironmentKey])
     }
 
@@ -128,10 +129,11 @@ final class PasswordChannelTests: XCTestCase {
     }
 
     func testTheEnvironmentHandedToSSHCarriesNoPassword() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
+        let channel = try AskpassChannel(
+            password: SecureBuffer(secret), helperPath: "/path/to/SSH-Wakey")
         defer { channel.invalidate() }
 
-        let environment = channel.environmentAdditions(helperPath: "/path/to/SSH-Wakey")
+        let environment = channel.environmentAdditions()
         XCTAssertEqual(environment["SSH_ASKPASS"], "/path/to/SSH-Wakey")
         XCTAssertEqual(environment["SSH_ASKPASS_REQUIRE"], "force")
         for value in environment.values {
@@ -147,6 +149,86 @@ final class PasswordChannelTests: XCTestCase {
 
         XCTAssertEqual(first.nonce.count, 64)
         XCTAssertNotEqual(first.nonce, second.nonce)
+    }
+
+    /// The socket path and the nonce both live in ssh's environment, and on
+    /// macOS anything running as this user can read that. So the nonce alone is
+    /// not proof of identity: the program on the other end has to be the helper
+    /// this app actually started.
+    func testAnotherProgramWithTheRightTokenIsStillRefused() throws {
+        let channel = try AskpassChannel(
+            password: SecureBuffer(secret), helperPath: "/usr/bin/true")
+        defer { channel.invalidate() }
+
+        let answer = ask(
+            socket: try socketPath(of: channel),
+            nonce: channel.nonce,
+            prompt: "morgan@10.0.0.4's password: ")
+
+        XCTAssertTrue(answer?.isEmpty ?? true, "the password must not be handed over")
+        XCTAssertFalse(channel.outcome.served)
+        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 1)
+    }
+
+    func testTheRealHelperIsStillAnswered() throws {
+        // The tests run inside the app, so this process is the expected program.
+        let channel = try AskpassChannel(password: SecureBuffer(secret))
+        defer { channel.invalidate() }
+
+        let answer = ask(
+            socket: try socketPath(of: channel),
+            nonce: channel.nonce,
+            prompt: "morgan@10.0.0.4's password: ")
+
+        XCTAssertEqual(String(decoding: try XCTUnwrap(answer), as: UTF8.self), secret + "\n")
+        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
+    }
+
+    /// If this ever fails, the identity check is comparing two spellings of the
+    /// same file and will refuse the genuine helper, which would break every
+    /// connection. Better to fail here, saying exactly that, than to have three
+    /// unrelated-looking tests fail somewhere else.
+    func testThisProcessIsRecognisedByTheSamePathItReports() throws {
+        let expected = URL(fileURLWithPath: try XCTUnwrap(Bundle.main.executablePath))
+            .resolvingSymlinksInPath().path
+
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        XCTAssertGreaterThan(proc_pidpath(getpid(), &buffer, UInt32(buffer.count)), 0)
+        let running = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
+
+        XCTAssertEqual(running, expected,
+                       "the identity check compares these two, so they have to agree")
+    }
+
+    /// The whole path, for real: a separate process of this very binary, started
+    /// the way ssh starts it, asking over the socket and being answered.
+    ///
+    /// This is what proves the identity check does not lock out the genuine
+    /// helper, which would break every connection.
+    func testARealHelperProcessIsAnswered() throws {
+        let executable = try XCTUnwrap(Bundle.main.executablePath)
+        let channel = try AskpassChannel(password: SecureBuffer(secret), helperPath: executable)
+        defer { channel.invalidate() }
+
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: executable)
+        helper.arguments = ["morgan@10.0.0.4's password: "]
+        var environment = ProcessRunner.minimalEnvironment()
+        environment.merge(channel.environmentAdditions()) { _, new in new }
+        helper.environment = environment
+
+        let output = Pipe()
+        helper.standardOutput = output
+        helper.standardError = FileHandle.nullDevice
+        try helper.run()
+
+        let answer = output.fileHandleForReading.readDataToEndOfFile()
+        helper.waitUntilExit()
+
+        XCTAssertEqual(String(decoding: answer, as: UTF8.self), secret + "\n")
+        XCTAssertEqual(helper.terminationStatus, 0)
+        XCTAssertTrue(channel.outcome.served)
+        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
     }
 
     // MARK: - Prompt matching
@@ -225,10 +307,17 @@ final class PasswordChannelReportingTests: XCTestCase {
 
     @MainActor
     func testAnUnauthorisedReadOfTheChannelIsReported() {
-        var outcome = AskpassChannel.Outcome()
-        outcome.wrongNonceAttempts = 2
+        var wrongToken = AskpassChannel.Outcome()
+        wrongToken.wrongNonceAttempts = 2
+        var wrongUser = AskpassChannel.Outcome()
+        wrongUser.wrongUserAttempts = 1
+        var wrongProgram = AskpassChannel.Outcome()
+        wrongProgram.wrongProgramAttempts = 1
 
-        let annotated = SSHSessionManager.annotated(failure, with: outcome)
-        XCTAssertTrue(annotated.guidance?.contains("one-time") ?? false)
+        for outcome in [wrongToken, wrongUser, wrongProgram] {
+            let annotated = SSHSessionManager.annotated(failure, with: outcome)
+            XCTAssertTrue(annotated.guidance?.contains("was refused") ?? false, "\(outcome)")
+            XCTAssertTrue(annotated.guidance?.contains("worth looking into") ?? false, "\(outcome)")
+        }
     }
 }

@@ -124,7 +124,7 @@ final class SSHSessionManager {
         let channel: AskpassChannel
         let arguments: [String]
         do {
-            channel = try AskpassChannel(password: password)
+            channel = try AskpassChannel(password: password, helperPath: Self.askpassHelperPath)
             arguments = try SSHCommandBuilder.masterArguments(
                 for: connection, controlPath: controlPath, connectTimeout: Self.connectTimeout)
         } catch {
@@ -138,7 +138,7 @@ final class SSHSessionManager {
         defer { channel.invalidate() }
 
         var environment = ProcessRunner.minimalEnvironment()
-        environment.merge(channel.environmentAdditions(helperPath: Self.askpassHelperPath)) { _, new in new }
+        environment.merge(channel.environmentAdditions()) { _, new in new }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: SSHCommandBuilder.sshExecutable)
@@ -381,9 +381,10 @@ final class SSHSessionManager {
         for prompt in outcome.refusedPrompts where !prompt.isEmpty {
             notes.append("This prompt went unanswered because it is not a password prompt: \(prompt)")
         }
-        if outcome.wrongNonceAttempts > 0 || outcome.wrongUserAttempts > 0 {
-            notes.append("Something tried to read the password channel without the right one-time "
-                + "token, and was refused.")
+        if outcome.wrongNonceAttempts > 0 || outcome.wrongUserAttempts > 0
+            || outcome.wrongProgramAttempts > 0 {
+            notes.append("Something other than ssh's password helper tried to read the password "
+                + "channel, and was refused. That is worth looking into.")
         }
         guard !notes.isEmpty else { return failure }
 

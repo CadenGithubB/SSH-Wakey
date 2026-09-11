@@ -1,3 +1,5 @@
+import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 /// Asks for the password for one connection attempt.
@@ -12,6 +14,7 @@ struct PasswordPromptView: View {
     var onCancel: () -> Void
 
     @State private var password = ""
+    @State private var secureInput = SecureInputSession()
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -60,7 +63,18 @@ struct PasswordPromptView: View {
             .padding(16)
         }
         .frame(width: 420)
-        .onAppear { focused = true }
+        .background(UncapturableWindow())
+        .onAppear {
+            focused = true
+            secureInput.acquire()
+        }
+        .onDisappear { secureInput.release() }
+        // Secure input is a system-wide setting, so it is given up the moment
+        // this app stops being frontmost and taken again when it comes back.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in secureInput.acquire() }
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification)) { _ in secureInput.release() }
     }
 
     private func submit() {
@@ -68,5 +82,47 @@ struct PasswordPromptView: View {
         let entered = password
         password = ""
         onConnect(entered)
+    }
+}
+
+
+/// Marks the sheet's window as not capturable, so the password field does not
+/// appear in screenshots, screen recordings or a shared screen.
+private struct UncapturableWindow: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { view.window?.sharingType = .none }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Holds secure event input for as long as the password sheet is on screen.
+///
+/// Secure event input stops other processes reading keystrokes through an event
+/// tap, which is the ordinary way a keylogger works. NSSecureTextField does this
+/// itself while it is the first responder; asking explicitly covers the whole
+/// time the sheet is up, including while focus is elsewhere in it.
+///
+/// It is released as soon as the sheet closes or the app stops being frontmost,
+/// because secure input is system-wide and leaving it on interferes with text
+/// input everywhere else.
+@MainActor
+final class SecureInputSession {
+    private var isHolding = false
+
+    /// Exposed so the state can be asserted in tests.
+    var isActive: Bool { isHolding }
+
+    func acquire() {
+        guard !isHolding, EnableSecureEventInput() == noErr else { return }
+        isHolding = true
+    }
+
+    func release() {
+        guard isHolding else { return }
+        DisableSecureEventInput()
+        isHolding = false
     }
 }

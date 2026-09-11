@@ -82,6 +82,60 @@ method*, so a rejected password produces a second ask under the next method.
 SSH-Wakey does not answer it. The failure message says that it happened, and you
 decide whether to try again. Nothing is retried automatically.
 
+## Hardening the app itself
+
+Protecting the password in memory is pointless if anything on the machine can
+read that memory, so the Release build is configured to prevent it.
+
+- **Hardened Runtime is on**, which blocks `DYLD_INSERT_LIBRARIES` injection and
+  unsigned code being loaded into the process, and restricts `task_for_pid`
+  against it.
+- **`com.apple.security.get-task-allow` is not present.** Xcode injects that
+  entitlement by default when signing locally, and it lets any process running
+  as you attach a debugger and read the app's memory, password included.
+  `CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO` stops the injection for Release.
+- **The Debug build keeps both**, because Xcode cannot attach a debugger
+  otherwise. That is the right trade for development and the wrong one for daily
+  use: run the Release build.
+
+Verify a build with:
+
+```bash
+codesign -dv --entitlements - /path/to/SSH-Wakey.app
+```
+
+`flags=0x10002(adhoc,runtime)` means the Hardened Runtime is on, and
+`get-task-allow` should not appear at all.
+
+### While the password is on screen and in memory
+
+- **The pages holding it are pinned** with `mlock`, so the plaintext is never
+  written out to swap. macOS encrypts swap, but not putting it there is better
+  than relying on that.
+- **The password sheet is excluded from screen capture** (`sharingType = .none`),
+  so it does not appear in screenshots, screen recordings or a shared screen.
+- **Secure event input is held** for as long as the sheet is open, which stops
+  other processes reading the keystrokes through an event tap. It is given up
+  the moment the sheet closes or the app stops being frontmost, because it is a
+  system-wide setting that interferes with text input everywhere else.
+
+### Who is allowed to ask for the password
+
+The socket path and the nonce travel in the environment of the `ssh` process,
+and on macOS anything running as your account can read the environment of
+another of your own processes. So the nonce alone is not proof of identity.
+
+Before answering, the channel checks the peer's process id with `LOCAL_PEERPID`,
+resolves its executable with `proc_pidpath`, and requires it to be the same
+binary the app named in `SSH_ASKPASS`. Paths are compared with symlinks
+resolved. A program that scraped the token out of `ssh`'s environment is refused
+and the refusal is reported in the failure message.
+
+This check fails open in one case: if the peer's process cannot be identified at
+all, the uid check and the nonce still stand and the request is allowed. That is
+deliberate, so an unexpected platform change degrades to the previous behaviour
+rather than making the app unusable.
+
 ## Known limitations
 
 Stated plainly, because a security document that only lists strengths is not
@@ -96,9 +150,12 @@ useful.
 - **Memory is not locked.** There is no `mlock`, so in principle the page could
   be written to swap. macOS encrypts swap by default, which mitigates but does
   not eliminate this.
-- **Local root sees everything.** Anything running as root, or as you with a
-  debugger, can read the app's memory or the socket. Nothing here defends against
-  a compromised local account; that is not a threat this design can address.
+- **Local root still sees everything.** The Hardened Runtime raises the bar for
+  a process running as *you*, but root can still read memory, and root can read
+  the socket. Nothing here defends against a fully compromised machine.
+- **A crash could capture it.** If the app crashes while the password is in
+  memory, a crash report may contain it. Keeping the plaintext alive for seconds
+  rather than minutes is the mitigation; there is no way to rule it out.
 - **Trust on first use is still trust on first use.** With strict checking on,
   an unknown host is refused and the app offers to show you the fingerprint it
   fetched with `ssh-keyscan`. Fetching a fingerprint over the network proves

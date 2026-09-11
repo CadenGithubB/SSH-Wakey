@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Security
 
@@ -30,10 +31,14 @@ final class AskpassChannel: @unchecked Sendable {
         var refusedPrompts: [String] = []
         var wrongNonceAttempts = 0
         var wrongUserAttempts = 0
+        /// Something connected that was not the helper this app started.
+        var wrongProgramAttempts = 0
     }
 
     let nonce: String
 
+    /// The only executable that should ever ask. Empty disables the check.
+    private let helperPath: String
     private let password: SecureBuffer
     private let directoryURL: URL
     private let socketPath: String
@@ -52,8 +57,9 @@ final class AskpassChannel: @unchecked Sendable {
     }
 
     /// Creates the private directory, binds the socket and starts listening.
-    init(password: SecureBuffer) throws {
+    init(password: SecureBuffer, helperPath: String = Bundle.main.executablePath ?? "") throws {
         self.password = password
+        self.helperPath = Self.resolved(helperPath)
         self.nonce = Self.makeNonce()
 
         let parent = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
@@ -80,7 +86,7 @@ final class AskpassChannel: @unchecked Sendable {
 
     /// The environment additions the spawned `ssh` needs. The password is not
     /// in here; only where to ask and how to prove it is the right asker.
-    func environmentAdditions(helperPath: String) -> [String: String] {
+    func environmentAdditions() -> [String: String] {
         [
             "SSH_ASKPASS": helperPath,
             "SSH_ASKPASS_REQUIRE": "force",
@@ -195,6 +201,11 @@ final class AskpassChannel: @unchecked Sendable {
             return
         }
 
+        guard peerIsTheHelper(client) else {
+            record { $0.wrongProgramAttempts += 1 }
+            return
+        }
+
         guard let request = readRequest(from: client) else { return }
         let parts = request.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
         let presentedNonce = parts.first.map(String.init) ?? ""
@@ -229,6 +240,35 @@ final class AskpassChannel: @unchecked Sendable {
         // further ask can be noticed, and `invalidate()` closes it when the
         // connection attempt ends.
         password.wipe()
+    }
+
+    /// The socket path and the nonce travel in the environment of the `ssh`
+    /// process, and on macOS anything running as this user can read another of
+    /// its own processes' environment. So the nonce alone is not proof: check
+    /// that the program on the other end really is the copy of this executable
+    /// that ssh started as its askpass helper.
+    private func peerIsTheHelper(_ client: Int32) -> Bool {
+        guard !helperPath.isEmpty else { return true }
+
+        var peerPID = pid_t(0)
+        var size = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(client, SOL_LOCAL, LOCAL_PEERPID, &peerPID, &size) == 0, peerPID > 0 else {
+            // Cannot tell who it is. The uid check and the nonce still apply.
+            return true
+        }
+
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let length = proc_pidpath(peerPID, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return true }
+        return Self.resolved(String(cString: buffer)) == helperPath
+    }
+
+    /// Both sides are compared with symlinks resolved, so that /var against
+    /// /private/var, or an app reached through a linked folder, is not mistaken
+    /// for a different program.
+    private static func resolved(_ path: String) -> String {
+        guard !path.isEmpty else { return path }
+        return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
     }
 
     private func readRequest(from client: Int32) -> String? {

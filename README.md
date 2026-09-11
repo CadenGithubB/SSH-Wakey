@@ -35,6 +35,12 @@ xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey -configuration Release
 xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey -destination 'platform=macOS' test
 ```
 
+**Run the Release build.** It has the Hardened Runtime on and no
+`get-task-allow` entitlement, so another process running as you cannot attach a
+debugger and read the password out of memory. The Debug build deliberately keeps
+both, because Xcode cannot attach a debugger otherwise. SECURITY.md explains the
+difference and how to check a build.
+
 The build is ad-hoc signed (`CODE_SIGN_IDENTITY = "-"`), which is enough to run
 it on the Mac that built it. The App Sandbox is deliberately off: the app runs
 `/usr/bin/ssh`, reads `~/.ssh/known_hosts`, and writes to Application Support
@@ -351,12 +357,12 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             131 tests
+SSH-WakeyTests/             136 tests
 ```
 
 ## Tests
 
-131 unit tests covering persistence and its file permissions, timestamps, change
+136 unit tests covering persistence and its file permissions, timestamps, change
 history, the per-row privacy toggle, which columns may be hidden and
 how the table layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the
