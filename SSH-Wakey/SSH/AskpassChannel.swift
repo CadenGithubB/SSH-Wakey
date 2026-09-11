@@ -22,11 +22,10 @@ final class AskpassChannel: @unchecked Sendable {
         /// False when ssh authenticated without ever asking, usually because a
         /// key or an agent was accepted first.
         var served = false
-        /// ssh came back for a password after being given one. That happens
-        /// when the first authentication method rejected it and ssh moves on to
-        /// the next one. One typed password is used once, so this goes
-        /// unanswered.
-        var askedAgainAfterServing = 0
+        /// ssh asked a question it had already been answered, or asked once too
+        /// many times. Answering the same prompt twice is a retry, which is the
+        /// thing this refuses to do.
+        var repeatedPrompts = 0
         /// Prompts that were not password prompts, so they went unanswered.
         var refusedPrompts: [String] = []
         var wrongNonceAttempts = 0
@@ -46,7 +45,8 @@ final class AskpassChannel: @unchecked Sendable {
     private let lock = NSLock()
 
     private var listenDescriptor: Int32 = -1
-    private var served = false
+    /// The prompts already answered, so none is ever answered twice.
+    private var answeredPrompts: Set<String> = []
     private var invalidated = false
     private var outcomeValue = Outcome()
 
@@ -227,27 +227,34 @@ final class AskpassChannel: @unchecked Sendable {
             return
         }
 
+        // Never answer the same question twice: that is what a retry is, and it
+        // is what turns one wrong password into a string of failed logins.
+        //
+        // Answering a *different* password prompt is not a retry. ssh offers
+        // the password to each authentication method the server advertises, so
+        // a machine whose keyboard-interactive path is unhappy will ask again
+        // under the plain password method, with different wording. Refusing
+        // that was refusing the login itself.
+        let question = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         lock.lock()
-        let alreadyServed = served
-        if !served { served = true }
+        let alreadyAnswered = answeredPrompts.contains(question)
+        let exhausted = answeredPrompts.count >= Self.maximumPrompts
+        if !alreadyAnswered && !exhausted { answeredPrompts.insert(question) }
         lock.unlock()
 
-        // One typed password, one use. ssh asks again when the first
-        // authentication method rejects it; answering that would be a silent
-        // retry, so it is recorded and left unanswered.
-        guard !alreadyServed else {
-            record { $0.askedAgainAfterServing += 1 }
+        guard !alreadyAnswered, !exhausted else {
+            record { $0.repeatedPrompts += 1 }
             return
         }
 
         send(to: client)
         record { $0.served = true }
-
-        // The plaintext is not needed again. The listener stays up only so a
-        // further ask can be noticed, and `invalidate()` closes it when the
-        // connection attempt ends.
-        password.wipe()
     }
+
+    /// A ceiling on how many different password prompts one attempt will
+    /// answer. Two is the normal maximum, one per authentication method that
+    /// takes a password. The third is headroom, not an invitation.
+    static let maximumPrompts = 3
 
     /// The socket path and the nonce travel in the environment of the `ssh`
     /// process, and on macOS anything running as this user can read another of

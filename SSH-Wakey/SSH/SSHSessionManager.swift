@@ -425,10 +425,10 @@ final class SSHSessionManager {
                 + "allowed it, connect again.")
         }
 
-        if outcome.askedAgainAfterServing > 0 {
-            notes.append("ssh asked for the password a second time, for another authentication "
-                + "method. One typed password is used once, so that went unanswered rather than "
-                + "becoming a silent retry. If the password was right, press Connect and try again.")
+        if outcome.repeatedPrompts > 0 {
+            notes.append("ssh asked the same question it had already been answered. That goes "
+                + "unanswered, because repeating a password that has just been rejected only "
+                + "produces more failed logins.")
         }
         for prompt in outcome.refusedPrompts where !prompt.isEmpty {
             notes.append("This prompt went unanswered because it is not a password prompt: \(prompt)")

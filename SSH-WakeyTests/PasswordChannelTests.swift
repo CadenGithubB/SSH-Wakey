@@ -43,7 +43,7 @@ final class PasswordChannelTests: XCTestCase {
 
         XCTAssertEqual(String(decoding: try XCTUnwrap(answer), as: UTF8.self), secret + "\n")
         XCTAssertTrue(channel.outcome.served)
-        XCTAssertEqual(channel.outcome.askedAgainAfterServing, 0)
+        XCTAssertEqual(channel.outcome.repeatedPrompts, 0)
     }
 
     func testAWrongNonceGetsNothing() throws {
@@ -80,10 +80,9 @@ final class PasswordChannelTests: XCTestCase {
         }
     }
 
-    /// ssh asks a second time when the first authentication method rejects the
-    /// password. Answering would be a silent retry, so the second ask is
-    /// recorded and left unanswered.
-    func testThePasswordIsServedOnlyOnce() throws {
+    /// Answering the same question twice is a retry, and that is the thing
+    /// being refused.
+    func testTheSamePromptIsNeverAnsweredTwice() throws {
         let channel = try AskpassChannel(password: SecureBuffer(secret))
         defer { channel.invalidate() }
         let path = try socketPath(of: channel)
@@ -91,10 +90,43 @@ final class PasswordChannelTests: XCTestCase {
         let first = ask(socket: path, nonce: channel.nonce, prompt: "user@host's password: ")
         XCTAssertEqual(String(decoding: try XCTUnwrap(first), as: UTF8.self), secret + "\n")
 
-        let second = ask(socket: path, nonce: channel.nonce, prompt: "(user@host) Password:")
-        XCTAssertTrue(second?.isEmpty ?? true)
-        XCTAssertEqual(channel.outcome.askedAgainAfterServing, 1)
+        let again = ask(socket: path, nonce: channel.nonce, prompt: "user@host's password: ")
+        XCTAssertTrue(again?.isEmpty ?? true)
+        XCTAssertEqual(channel.outcome.repeatedPrompts, 1)
         XCTAssertTrue(channel.outcome.served)
+    }
+
+    /// ssh offers the password to each method the server advertises, wording
+    /// the prompt differently each time. That is one login attempt, not a
+    /// retry, and refusing it was refusing the login.
+    func testADifferentPromptIsAnswered() throws {
+        let channel = try AskpassChannel(password: SecureBuffer(secret))
+        defer { channel.invalidate() }
+        let path = try socketPath(of: channel)
+
+        let keyboardInteractive = ask(
+            socket: path, nonce: channel.nonce, prompt: "(admin@10.0.0.4) Password:")
+        let passwordMethod = ask(
+            socket: path, nonce: channel.nonce, prompt: "admin@10.0.0.4's password: ")
+
+        XCTAssertEqual(String(decoding: try XCTUnwrap(keyboardInteractive), as: UTF8.self), secret + "\n")
+        XCTAssertEqual(String(decoding: try XCTUnwrap(passwordMethod), as: UTF8.self), secret + "\n")
+        XCTAssertEqual(channel.outcome.repeatedPrompts, 0)
+    }
+
+    func testItStopsAfterAFewDifferentPrompts() throws {
+        let channel = try AskpassChannel(password: SecureBuffer(secret))
+        defer { channel.invalidate() }
+        let path = try socketPath(of: channel)
+
+        for index in 0..<AskpassChannel.maximumPrompts {
+            let answer = ask(socket: path, nonce: channel.nonce, prompt: "password \(index):")
+            XCTAssertFalse(answer?.isEmpty ?? true, "prompt \(index) should have been answered")
+        }
+
+        let beyond = ask(socket: path, nonce: channel.nonce, prompt: "password again:")
+        XCTAssertTrue(beyond?.isEmpty ?? true)
+        XCTAssertEqual(channel.outcome.repeatedPrompts, 1)
     }
 
     func testTheChannelIsUnusableOnceTheAttemptIsOver() throws {
@@ -290,15 +322,15 @@ final class PasswordChannelReportingTests: XCTestCase {
     }
 
     @MainActor
-    func testASecondAskIsExplainedRatherThanHidden() {
+    func testARepeatedPromptIsExplainedRatherThanHidden() {
         var outcome = AskpassChannel.Outcome()
         outcome.served = true
-        outcome.askedAgainAfterServing = 1
+        outcome.repeatedPrompts = 1
 
         let annotated = SSHSessionManager.annotated(failure, with: outcome)
         let guidance = try? XCTUnwrap(annotated.guidance)
-        XCTAssertTrue(guidance?.contains("second time") ?? false, annotated.guidance ?? "")
-        XCTAssertTrue(guidance?.contains("silent retry") ?? false, annotated.guidance ?? "")
+        XCTAssertTrue(guidance?.contains("same question") ?? false, annotated.guidance ?? "")
+        XCTAssertTrue(guidance?.contains("failed logins") ?? false, annotated.guidance ?? "")
     }
 
     @MainActor
