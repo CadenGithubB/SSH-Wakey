@@ -9,6 +9,12 @@ struct ContentView: View {
     @State private var selection: SSHConnection.ID?
     @State private var sheet: SheetKind?
     @State private var removalTarget: SSHConnection?
+    @State private var showsColumnPicker = false
+
+    /// What Connect does. Unlocking is the default, because getting a machine
+    /// past its FileVault screen is the job this app exists for, and that needs
+    /// nothing left open afterwards.
+    @AppStorage("connectMode") private var connectMode: ConnectMode = .unlock
 
     /// Which optional columns are showing, and the order and widths of all of
     /// them. Name, Username, Host and the two dates cannot be hidden; Port and
@@ -106,23 +112,45 @@ struct ContentView: View {
 
     /// Sits in the header cell above the status dot and the eye, which is the
     /// one column with no title of its own.
+    ///
+    /// A plain button rather than a Menu: a Menu lays its label out against the
+    /// leading edge and reserves room for an indicator, so the icon ends up
+    /// off-centre no matter what the frame says. Centring an Image inside a
+    /// fixed frame is exact.
     private var columnsMenu: some View {
-        Menu {
-            Section("Optional columns") {
-                ForEach(Column.optional) { column in
-                    Toggle(column.title, isOn: visibility(of: column))
-                }
-            }
+        Button {
+            showsColumnPicker.toggle()
         } label: {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+                .frame(width: Column.status.idealWidth, height: Column.headerHeight)
+                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .frame(width: Column.status.idealWidth, height: Column.headerHeight)
-        .contentShape(Rectangle())
-        .help("Choose which columns to show. Name, Username, Host and the dates always show.")
+        .buttonStyle(.plain)
+        .help("Choose which columns to show")
+        .popover(isPresented: $showsColumnPicker, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Optional columns")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                ForEach(Column.optional) { column in
+                    Toggle(column.title, isOn: visibility(of: column))
+                }
+
+                Divider()
+
+                Text("Name, Username, Host and the dates always show, because a row that cannot "
+                     + "tell you which machine it is is not worth showing.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(14)
+            .frame(width: 240)
+        }
     }
 
     private var table: some View {
@@ -132,6 +160,7 @@ struct ContentView: View {
                     StatusDot(state: sessions.state(for: connection.id))
                     hideButton(for: connection)
                 }
+                .frame(maxWidth: .infinity)
             }
             .width(Column.status.idealWidth)
             .customizationID(Column.status.id)
@@ -335,7 +364,17 @@ struct ContentView: View {
             }
             .keyboardShortcut(.defaultAction)
 
-        case .idle, .failed:
+        case .idle, .failed, .unlocked:
+            Picker("Connect mode", selection: $connectMode) {
+                ForEach(ConnectMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+            .help(connectMode.explanation)
+
             Button("Connect") {
                 if let connection = selectedConnection { activate(connection) }
             }
@@ -375,7 +414,7 @@ struct ContentView: View {
                 connection: connection,
                 onConnect: { entered in
                     sheet = nil
-                    sessions.connect(connection, password: SecureBuffer(entered))
+                    sessions.connect(connection, password: SecureBuffer(entered), mode: connectMode)
                 },
                 onCancel: { sheet = nil })
 
@@ -407,7 +446,7 @@ struct ContentView: View {
             sessions.openInTerminal(connection.id)
         case .connecting:
             break
-        case .idle, .failed:
+        case .idle, .failed, .unlocked:
             sheet = .password(connection)
         }
     }
@@ -429,6 +468,7 @@ struct StatusDot: View {
         case .idle: return .secondary.opacity(0.25)
         case .connecting: return .yellow
         case .connected: return .green
+        case .unlocked: return .blue
         case .failed(let failure): return failure.kind == .cancelled ? .secondary.opacity(0.25) : .red
         }
     }
@@ -438,6 +478,7 @@ struct StatusDot: View {
         case .idle: return "Not connected"
         case .connecting: return "Connecting"
         case .connected: return "Connected"
+        case .unlocked: return "Logged in, then closed"
         case .failed(let failure): return failure.headline
         }
     }

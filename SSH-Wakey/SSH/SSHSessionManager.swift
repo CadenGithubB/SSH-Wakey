@@ -15,10 +15,21 @@ final class SSHSessionManager {
         case idle
         case connecting(stage: String)
         case connected(Connected)
+        /// Logged in and then closed, either because that is all that was
+        /// asked for or because the far end hung up straight afterwards.
+        case unlocked(Unlocked)
         case failed(SSHFailure)
 
         var isConnecting: Bool { if case .connecting = self { return true }; return false }
         var isConnected: Bool { if case .connected = self { return true }; return false }
+    }
+
+    struct Unlocked: Equatable {
+        var at: Date
+        /// False when a key was accepted and the typed password never used.
+        var usedPassword: Bool
+        /// True when the machine closed the connection rather than the app.
+        var closedByServer: Bool
     }
 
     struct Connected: Equatable {
@@ -75,7 +86,7 @@ final class SSHSessionManager {
 
     /// Takes ownership of `password` and wipes it when the attempt ends,
     /// whether it succeeded, failed or was cancelled.
-    func connect(_ connection: SSHConnection, password: SecureBuffer) {
+    func connect(_ connection: SSHConnection, password: SecureBuffer, mode: ConnectMode) {
         let id = connection.id
         guard attempts[id] == nil, sessions[id] == nil else {
             password.wipe()
@@ -83,7 +94,7 @@ final class SSHSessionManager {
         }
         states[id] = .connecting(stage: "Starting ssh…")
         attempts[id] = Task { [weak self] in
-            await self?.runAttempt(connection, password: password)
+            await self?.runAttempt(connection, password: password, mode: mode)
         }
     }
 
@@ -91,7 +102,11 @@ final class SSHSessionManager {
         attempts[id]?.cancel()
     }
 
-    private func runAttempt(_ connection: SSHConnection, password: SecureBuffer) async {
+    private func runAttempt(
+        _ connection: SSHConnection,
+        password: SecureBuffer,
+        mode: ConnectMode
+    ) async {
         let id = connection.id
         defer {
             password.wipe()
@@ -125,8 +140,14 @@ final class SSHSessionManager {
         let arguments: [String]
         do {
             channel = try AskpassChannel(password: password, helperPath: Self.askpassHelperPath)
-            arguments = try SSHCommandBuilder.masterArguments(
-                for: connection, controlPath: controlPath, connectTimeout: Self.connectTimeout)
+            switch mode {
+            case .unlock:
+                arguments = try SSHCommandBuilder.unlockArguments(
+                    for: connection, connectTimeout: Self.connectTimeout)
+            case .session:
+                arguments = try SSHCommandBuilder.masterArguments(
+                    for: connection, controlPath: controlPath, connectTimeout: Self.connectTimeout)
+            }
         } catch {
             try? FileManager.default.removeItem(at: directory)
             states[id] = .failed(SSHFailure(
@@ -180,14 +201,24 @@ final class SSHSessionManager {
                 outcome = .cancelled
                 break
             }
+            // In unlock mode there is no control socket, so ssh saying it
+            // authenticated is the signal.
+            if mode == .unlock,
+               SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text) {
+                outcome = .authenticated
+                break
+            }
             // ssh creates the control socket only once the connection is
             // authenticated, so its appearance is the success signal.
-            if FileManager.default.fileExists(atPath: controlPath) {
+            if mode == .session, FileManager.default.fileExists(atPath: controlPath) {
                 outcome = .authenticated
                 break
             }
             if !process.isRunning {
-                outcome = .exited
+                // A machine unlocking its disk hangs up the moment it accepts
+                // the password, so a login that worked can still exit.
+                outcome = SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text)
+                    ? .authenticated : .exited
                 break
             }
             if Date() >= deadline {
@@ -240,8 +271,30 @@ final class SSHSessionManager {
             return
         }
 
-        // Authenticated. Confirm the master really is answering before
-        // promising the user a usable session.
+        // Authenticated.
+        let usedPassword = channel.outcome.served
+
+        if mode == .unlock {
+            terminate(process)
+            errorPipe.fileHandleForReading.readabilityHandler = nil
+            try? FileManager.default.removeItem(at: directory)
+            states[id] = .unlocked(
+                Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: false))
+            return
+        }
+
+        if !process.isRunning {
+            // A session was asked for, but the far end hung up right after
+            // accepting the password. That is what unlocking a disk looks like,
+            // so it is reported as a success rather than a failure.
+            errorPipe.fileHandleForReading.readabilityHandler = nil
+            try? FileManager.default.removeItem(at: directory)
+            states[id] = .unlocked(
+                Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: true))
+            return
+        }
+
+        // Confirm the master really is answering before promising a session.
         states[id] = .connecting(stage: "Verifying session…")
         let check = try? await ProcessRunner.run(
             executable: SSHCommandBuilder.sshExecutable,
@@ -265,7 +318,6 @@ final class SSHSessionManager {
         }
 
         errorPipe.fileHandleForReading.readabilityHandler = nil
-        let usedPassword = channel.outcome.served
         sessions[id] = Session(
             process: process, controlPath: controlPath, directoryURL: directory, connection: connection)
         states[id] = .connected(Connected(since: Date(), usedPassword: usedPassword))

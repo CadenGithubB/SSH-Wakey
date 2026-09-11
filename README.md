@@ -53,9 +53,28 @@ own signing identity and notarisation.
 
 1. **Add** a connection: display name, username, host or IP, port, and any extra
    `ssh` options. Nothing is flagged as wrong until you press Save.
-2. Select it and press **Connect**, or double-click the row.
-3. Type the password in the sheet that appears.
-4. When it says Connected, press **Open in Terminal** for a shell.
+2. Choose what Connect should do, from the menu beside the button.
+3. Select a connection and press **Connect**, or double-click the row.
+4. Type the password in the sheet that appears.
+
+### The two things Connect can do
+
+**Unlock, then disconnect** is the default. It logs in to prove the password
+works and closes the connection immediately. That is all a Mac waiting at the
+FileVault screen needs: the login is what unlocks its disk, and nothing has to
+stay open afterwards. Nothing is left running and no Terminal window opens.
+
+It works even though the machine hangs up the moment it accepts the password,
+because ssh is asked to announce that it authenticated and the app watches for
+that rather than for a clean exit. A login that succeeded and a login that was
+refused produce the same exit code, so without it the two would be
+indistinguishable.
+
+**Open a session** logs in and holds the connection open. When it says
+Connected, **Open in Terminal** starts a shell on that already-authenticated
+connection without asking for the password again. If the machine hangs up
+straight after accepting the password, which is what unlocking a disk looks
+like, the app says so rather than reporting a failure.
 
 Double-clicking a row that is already connected opens another Terminal window on
 the same session.
@@ -361,12 +380,12 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             136 tests
+SSH-WakeyTests/             143 tests
 ```
 
 ## Tests
 
-136 unit tests covering persistence and its file permissions, timestamps, change
+143 unit tests covering persistence and its file permissions, timestamps, change
 history, the per-row privacy toggle, which columns may be hidden and
 how the table layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the

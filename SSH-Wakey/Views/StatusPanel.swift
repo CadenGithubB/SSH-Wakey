@@ -120,6 +120,9 @@ struct StatusPanel: View {
         case .connected:
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
+        case .unlocked:
+            Image(systemName: "lock.open.fill")
+                .foregroundStyle(.blue)
         case .failed(let failure):
             Image(systemName: failure.kind == .cancelled ? "xmark.circle" : "exclamationmark.triangle.fill")
                 .foregroundStyle(failure.kind == .cancelled ? Color.secondary : Color.red)
@@ -141,6 +144,9 @@ struct StatusPanel: View {
         case .connected:
             guard connection != nil else { return "Connected." }
             return "Connected to \(destination)."
+        case .unlocked:
+            guard connection != nil else { return "Logged in, then closed." }
+            return "Logged in to \(destination). The connection is closed."
         case .failed(let failure):
             return failure.headline
         }
@@ -159,6 +165,23 @@ struct StatusPanel: View {
             return info.usedPassword
                 ? "Authenticated at \(opened). Open in Terminal starts a shell on this session without asking again."
                 : "Authenticated at \(opened) with an SSH key, so the password you typed was never used or sent."
+        case .unlocked(let info):
+            var lines: [String] = []
+            if info.closedByServer {
+                lines.append("The machine closed the connection straight after accepting the "
+                    + "password. If it was waiting at the FileVault screen, that is exactly what "
+                    + "unlocking looks like: it is starting up now. Give it a minute, then connect "
+                    + "again for a shell.")
+            } else {
+                lines.append("That is all this mode does. The password was accepted and nothing "
+                    + "was left open. If that Mac was waiting at the FileVault screen it is "
+                    + "starting up now. Choose Open a session if you want a shell.")
+            }
+            if !info.usedPassword {
+                lines.append("An SSH key was accepted, so the password you typed was never used "
+                    + "or sent.")
+            }
+            return lines.joined(separator: "\n\n")
         case .failed(let failure):
             return failure.guidance
         }

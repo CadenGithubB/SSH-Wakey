@@ -57,6 +57,16 @@ struct SSHFailure: Equatable, Sendable {
 /// without opening a socket.
 enum SSHOutputClassifier {
 
+    /// True once ssh has said it authenticated.
+    ///
+    /// Only printed at `LogLevel=VERBOSE`. It is the one signal that survives
+    /// the server hanging up immediately afterwards, which is exactly what a
+    /// Mac unlocking its FileVault disk does. A partial success is not a
+    /// success, so it deliberately does not match.
+    static func indicatesAuthenticationSucceeded(_ standardError: String) -> Bool {
+        standardError.contains("Authenticated to ")
+    }
+
     static func classify(exitCode: Int32, standardError: String) -> SSHFailure {
         let text = standardError
         let lowered = text.lowercased()

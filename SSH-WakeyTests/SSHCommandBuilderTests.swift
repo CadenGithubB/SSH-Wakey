@@ -72,6 +72,53 @@ final class SSHCommandBuilderTests: XCTestCase {
         }
     }
 
+    // MARK: - Unlock mode
+
+    private func unlockArguments(_ connection: SSHConnection) throws -> [String] {
+        try SSHCommandBuilder.unlockArguments(for: connection, connectTimeout: 10)
+    }
+
+    func testUnlockingRunsNoRemoteCommandAndLeavesNothingBehind() throws {
+        let arguments = try unlockArguments(connection)
+        XCTAssertTrue(arguments.contains("-N"))
+        XCTAssertFalse(arguments.contains("-M"), "nothing is going to attach, so no master")
+        XCTAssertFalse(arguments.contains { $0.hasPrefix("ControlPath=") })
+    }
+
+    /// Without this, a machine that hangs up the instant it accepts the
+    /// password is indistinguishable from one that rejected it.
+    func testBothModesAskSSHToAnnounceThatItAuthenticated() throws {
+        XCTAssertTrue(try unlockArguments(connection).contains("LogLevel=VERBOSE"))
+        XCTAssertTrue(try masterArguments(connection).contains("LogLevel=VERBOSE"))
+    }
+
+    func testUnlockingKeepsTheSameSecurityOptions() throws {
+        let arguments = try unlockArguments(connection)
+        XCTAssertTrue(arguments.contains("StrictHostKeyChecking=yes"))
+        XCTAssertTrue(arguments.contains("NumberOfPasswordPrompts=1"))
+        XCTAssertEqual(arguments.last, "10.0.0.4")
+
+        let userIndex = try XCTUnwrap(arguments.firstIndex(of: "-l"))
+        XCTAssertEqual(arguments[userIndex + 1], "morgan")
+    }
+
+    func testUnlockingStillRefusesDangerousExtraArguments() {
+        var risky = connection
+        risky.extraArguments = "-o ProxyCommand=/bin/sh"
+        XCTAssertThrowsError(try unlockArguments(risky))
+    }
+
+    func testTheModesAreDescribedAndStableOnDisk() {
+        XCTAssertEqual(ConnectMode.allCases.count, 2)
+        // The raw values are persisted in user defaults, so they must not drift.
+        XCTAssertEqual(ConnectMode.unlock.rawValue, "unlock")
+        XCTAssertEqual(ConnectMode.session.rawValue, "session")
+        for mode in ConnectMode.allCases {
+            XCTAssertFalse(mode.title.isEmpty)
+            XCTAssertFalse(mode.explanation.isEmpty)
+        }
+    }
+
     func testControlCommandsTargetTheSameSocket() {
         let arguments = SSHCommandBuilder.controlArguments(
             for: connection, controlPath: "/tmp/ctl", command: "check")

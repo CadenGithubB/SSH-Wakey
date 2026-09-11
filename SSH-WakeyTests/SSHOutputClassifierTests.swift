@@ -80,6 +80,28 @@ final class SSHOutputClassifierTests: XCTestCase {
         XCTAssertFalse(auth.offersHostKeyReview)
     }
 
+    // MARK: - Recognising a successful login
+
+    /// The exact line OpenSSH prints at LogLevel=VERBOSE.
+    func testTheAuthenticationLineIsRecognised() {
+        XCTAssertTrue(SSHOutputClassifier.indicatesAuthenticationSucceeded(
+            #"debug1: Authenticated to 10.0.0.4 ([10.0.0.4]:22) using "keyboard-interactive"."#))
+        XCTAssertTrue(SSHOutputClassifier.indicatesAuthenticationSucceeded(
+            #"debug1: Authenticated to jump (via proxy) using "password"."#))
+    }
+
+    func testAnythingShortOfASuccessfulLoginIsNot() {
+        for line in [
+            "debug1: Authentications that can continue: publickey,password,keyboard-interactive",
+            #"debug1: Authenticated using "keyboard-interactive" with partial success."#,
+            "morgan@10.0.0.4: Permission denied (publickey,password).",
+            "debug1: Next authentication method: password",
+            "",
+        ] {
+            XCTAssertFalse(SSHOutputClassifier.indicatesAuthenticationSucceeded(line), line)
+        }
+    }
+
     func testEveryClassificationExplainsWhatToDoNext() {
         let samples = [
             "Permission denied (publickey,password).",
