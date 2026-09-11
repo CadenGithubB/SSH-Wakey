@@ -74,7 +74,8 @@ struct SecuritySettingsView: View {
                     switch purpose {
                     case .create:
                         try store.enableEncryption(passphrase: entry.new)
-                        announce("Your connections are encrypted now.")
+                        announce("Encrypted. Export a copy now, while the passphrase is in front "
+                                 + "of you.")
                     case .change:
                         try store.changePassphrase(from: entry.current ?? "", to: entry.new)
                         announce("The recovery passphrase has been changed.")
@@ -84,6 +85,9 @@ struct SecuritySettingsView: View {
                     case .disable:
                         try store.disableEncryption(passphrase: entry.new)
                         announce("Encryption is off. The file is plain text again.")
+                    case .export(let url):
+                        try store.export(to: url, passphrase: entry.new)
+                        announce("Exported to \(url.lastPathComponent).")
                     }
                     sheet = nil
                 },
@@ -102,6 +106,8 @@ struct SecuritySettingsView: View {
     passphrase opens it if that key is ever gone. Losing one does not lose the other.
     """
 
+    /// Destination first, then the passphrase, so it is held only for the
+    /// moment it takes to write the file.
     private func export() {
         let panel = NSSavePanel()
         panel.title = "Export Connections"
@@ -111,8 +117,13 @@ struct SecuritySettingsView: View {
         panel.message = "This copy is not encrypted."
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        run { try store.export(to: url) }
-        if problem == nil { announce("Exported to \(url.lastPathComponent).") }
+
+        guard store.isEncrypted else {
+            run { try store.export(to: url) }
+            if problem == nil { announce("Exported to \(url.lastPathComponent).") }
+            return
+        }
+        sheet = .export(url)
     }
 
     private func run(_ work: () throws -> Void) {
@@ -137,6 +148,7 @@ extension PassphraseSheet.Purpose: Identifiable {
         case .change: return "change"
         case .unlock: return "unlock"
         case .disable: return "disable"
+        case .export: return "export"
         }
     }
 }

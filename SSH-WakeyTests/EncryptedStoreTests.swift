@@ -204,7 +204,7 @@ final class EncryptedStoreTests: XCTestCase {
         try store.enableEncryption(passphrase: passphrase)
 
         let destination = directory.appendingPathComponent("export.json")
-        try store.export(to: destination)
+        try store.export(to: destination, passphrase: passphrase)
 
         let exported = try String(contentsOf: destination, encoding: .utf8)
         XCTAssertTrue(exported.contains("192.168.0.228"))
@@ -220,6 +220,28 @@ final class EncryptedStoreTests: XCTestCase {
         let restored = ConnectionFileStore(directoryURL: copy)
         try FileManager.default.copyItem(at: destination, to: restored.fileURL)
         XCTAssertEqual(try restored.load().first?.host, "192.168.0.228")
+    }
+
+    func testExportNeedsThePassphraseOnceEncrypted() throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let destination = directory.appendingPathComponent("export.json")
+
+        XCTAssertThrowsError(try store.export(to: destination)) {
+            XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
+        }
+        XCTAssertThrowsError(try store.export(to: destination, passphrase: "wrong-passphrase-here"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path),
+                       "a refused export must not leave a file behind")
+
+        XCTAssertNoThrow(try store.export(to: destination, passphrase: passphrase))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    func testExportNeedsNoPassphraseWhenNothingIsEncrypted() throws {
+        let destination = directory.appendingPathComponent("plain-export.json")
+        try store.export(to: destination)
+
+        XCTAssertTrue(try String(contentsOf: destination, encoding: .utf8).contains("192.168.0.228"))
     }
 
     func testExportIsRefusedWhileLocked() throws {

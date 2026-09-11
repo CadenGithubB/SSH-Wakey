@@ -257,8 +257,18 @@ final class ConnectionStore {
 
     /// Writes a readable copy, in the same format as an unencrypted file, so it
     /// can be read by eye or put straight back.
-    func export(to url: URL) throws {
+    ///
+    /// Asks for the passphrase when the file is encrypted, so that producing a
+    /// permanent plain-text copy needs the same proof as the other two ways of
+    /// ending up with one. The passphrase is verified immediately before the
+    /// write, so it is held for as short a time as possible.
+    func export(to url: URL, passphrase: String? = nil) throws {
         guard access == .open else { throw ConnectionFileStore.StoreError.encrypted }
+
+        if let vault {
+            guard let passphrase else { throw VaultError.wrongPassphrase }
+            _ = try VaultCrypto.dataKey(from: vault, passphrase: passphrase)
+        }
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

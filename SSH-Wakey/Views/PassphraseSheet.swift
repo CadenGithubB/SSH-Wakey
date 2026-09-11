@@ -12,6 +12,8 @@ struct PassphraseSheet: View {
         case unlock
         /// Going back to a plain text file.
         case disable
+        /// Writing a plain text copy somewhere else.
+        case export(URL)
 
         var title: String {
             switch self {
@@ -19,6 +21,7 @@ struct PassphraseSheet: View {
             case .change: return "Change the recovery passphrase"
             case .unlock: return "Enter your recovery passphrase"
             case .disable: return "Turn off encryption"
+            case .export: return "Export a readable copy"
             }
         }
 
@@ -28,14 +31,23 @@ struct PassphraseSheet: View {
             case .change: return "Change"
             case .unlock: return "Unlock"
             case .disable: return "Turn Off"
+            case .export: return "Export"
             }
         }
 
-        var wantsConfirmation: Bool { self == .create || self == .change }
+        var wantsConfirmation: Bool {
+            switch self {
+            case .create, .change: return true
+            case .unlock, .disable, .export: return false
+            }
+        }
 
         /// Replacing a passphrase should prove you know the one being replaced,
         /// the same as any other password change.
-        var wantsCurrent: Bool { self == .change }
+        var wantsCurrent: Bool {
+            if case .change = self { return true }
+            return false
+        }
 
         var explanation: String {
             switch self {
@@ -55,6 +67,15 @@ struct PassphraseSheet: View {
                 encryption on will open them.
 
                 Once it does, a fresh Keychain key is stored so this does not happen again.
+                """
+            case .export(let url):
+                return """
+                A readable copy of your connections will be written to \(url.lastPathComponent). \
+                It is an ordinary file with no encryption, so keep it somewhere safe and out of \
+                shared folders.
+
+                Your passphrase confirms it is you, the same as the other two ways of ending up \
+                with a plain-text copy.
                 """
             case .disable:
                 return """
@@ -97,6 +118,7 @@ struct PassphraseSheet: View {
         case .create, .change: return "key.horizontal"
         case .unlock: return "lock.rotation"
         case .disable: return "lock.open"
+        case .export: return "square.and.arrow.up"
         }
     }
 

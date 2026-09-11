@@ -153,9 +153,15 @@ a one-time event rather than a permanent downgrade to typing a passphrase.
   own and read the file at leisure later, turning a brief lapse into lasting
   access. Turning encryption off would let them quietly downgrade the file to
   plain text and leave it that way.
-- **Export deliberately does not ask.** It produces the same information that is
-  already on screen, so a passphrase there would stop nobody, and making the
-  backup harder would discourage the one thing that actually saves you.
+- **Export asks too.** Every route to a lasting plain-text copy now needs the
+  same proof. It is worth being honest that this is a weaker gate than the other
+  two: the same information is already on screen, so it raises the effort rather
+  than closing a hole.
+- **There is a corner this creates.** If the passphrase is forgotten while the
+  Keychain key still works, the file opens normally but cannot be exported,
+  turned off, or re-keyed, because all three need the passphrase. The way out is
+  to read the connections off the screen and enter them again. Export once, as
+  soon as encryption is turned on, and the corner never comes up.
 - **A passphrase you cannot produce is a file you cannot open.** There is no
   back door and no reset. Export before you need it, and keep the passphrase in a
   password manager.
