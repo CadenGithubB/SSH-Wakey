@@ -10,12 +10,15 @@ struct PassphraseSheet: View {
         case change
         /// Opening a file whose Keychain key has gone.
         case unlock
+        /// Going back to a plain text file.
+        case disable
 
         var title: String {
             switch self {
             case .create: return "Choose a recovery passphrase"
             case .change: return "Change the recovery passphrase"
             case .unlock: return "Enter your recovery passphrase"
+            case .disable: return "Turn off encryption"
             }
         }
 
@@ -24,10 +27,11 @@ struct PassphraseSheet: View {
             case .create: return "Encrypt"
             case .change: return "Change"
             case .unlock: return "Unlock"
+            case .disable: return "Turn Off"
             }
         }
 
-        var wantsConfirmation: Bool { self != .unlock }
+        var wantsConfirmation: Bool { self == .create || self == .change }
 
         /// Replacing a passphrase should prove you know the one being replaced,
         /// the same as any other password change.
@@ -52,14 +56,26 @@ struct PassphraseSheet: View {
 
                 Once it does, a fresh Keychain key is stored so this does not happen again.
                 """
+            case .disable:
+                return """
+                The file will be rewritten in plain text and the Keychain key removed. Only your \
+                account will be able to read it, and FileVault still covers it while this Mac is \
+                off or locked.
+
+                Your passphrase confirms it is you. Without that, a moment at an unlocked Mac \
+                would be enough to quietly turn this off and leave the file readable.
+                """
             }
         }
     }
 
     /// What the sheet collected.
     struct Entry {
-        /// Only asked for when replacing an existing passphrase.
+        /// The existing passphrase, when the sheet asked for one as well as a
+        /// new one.
         var current: String?
+        /// Whatever was typed in the main field: a new passphrase, or the
+        /// existing one when that is all the sheet asked for.
         var new: String
     }
 
@@ -76,6 +92,14 @@ struct PassphraseSheet: View {
 
     @FocusState private var focused: Field?
 
+    private static func icon(for purpose: Purpose) -> String {
+        switch purpose {
+        case .create, .change: return "key.horizontal"
+        case .unlock: return "lock.rotation"
+        case .disable: return "lock.open"
+        }
+    }
+
     private var isComplete: Bool {
         guard !passphrase.isEmpty else { return false }
         if purpose.wantsCurrent && current.isEmpty { return false }
@@ -86,7 +110,7 @@ struct PassphraseSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
-                    Image(systemName: purpose == .unlock ? "lock.rotation" : "key.horizontal")
+                    Image(systemName: Self.icon(for: purpose))
                         .font(.system(size: 22))
                         .foregroundStyle(.tint)
                     Text(purpose.title).font(.headline)
@@ -104,7 +128,7 @@ struct PassphraseSheet: View {
                         .onSubmit(submit)
                 }
 
-                SecureField(purpose == .unlock ? "Recovery passphrase" : "New passphrase",
+                SecureField(purpose.wantsConfirmation ? "New passphrase" : "Recovery passphrase",
                             text: $passphrase)
                     .textFieldStyle(.roundedBorder)
                     .focused($focused, equals: .new)

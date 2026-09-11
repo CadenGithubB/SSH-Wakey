@@ -9,7 +9,6 @@ struct SecuritySettingsView: View {
     let store: ConnectionStore
 
     @State private var sheet: PassphraseSheet.Purpose?
-    @State private var confirmsTurningOff = false
     @State private var problem: String?
     @State private var note: String?
 
@@ -33,7 +32,7 @@ struct SecuritySettingsView: View {
                 if store.isEncrypted {
                     Button("Change Recovery Passphrase…") { sheet = .change }
                         .disabled(store.isLocked)
-                    Button("Turn Off Encryption…") { confirmsTurningOff = true }
+                    Button("Turn Off Encryption…") { sheet = .disable }
                         .disabled(store.isLocked)
                 } else {
                     Button("Turn On Encryption…") { sheet = .create }
@@ -82,22 +81,13 @@ struct SecuritySettingsView: View {
                     case .unlock:
                         try store.unlock(withPassphrase: entry.new)
                         announce("Unlocked, and a fresh Keychain key has been stored.")
+                    case .disable:
+                        try store.disableEncryption(passphrase: entry.new)
+                        announce("Encryption is off. The file is plain text again.")
                     }
                     sheet = nil
                 },
                 onCancel: { sheet = nil })
-        }
-        .confirmationDialog(
-            "Turn off encryption?", isPresented: $confirmsTurningOff, titleVisibility: .visible
-        ) {
-            Button("Turn Off and Store in Plain Text", role: .destructive) {
-                run { try store.disableEncryption() }
-                announce("Encryption is off. The file is plain text again.")
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The file will be rewritten in plain text and the Keychain key removed. Only your "
-                 + "account can read it, and FileVault still covers it while the Mac is off.")
         }
     }
 
@@ -146,6 +136,7 @@ extension PassphraseSheet.Purpose: Identifiable {
         case .create: return "create"
         case .change: return "change"
         case .unlock: return "unlock"
+        case .disable: return "disable"
         }
     }
 }

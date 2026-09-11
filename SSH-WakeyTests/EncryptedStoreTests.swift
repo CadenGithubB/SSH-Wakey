@@ -175,12 +175,27 @@ final class EncryptedStoreTests: XCTestCase {
 
     func testTurningItOffRestoresAPlainFileAndRemovesTheKey() throws {
         try store.enableEncryption(passphrase: passphrase)
-        try store.disableEncryption()
+        try store.disableEncryption(passphrase: passphrase)
 
         XCTAssertFalse(store.isEncrypted)
         XCTAssertTrue(fileText.contains("192.168.0.228"))
         XCTAssertNil(try KeychainKeyStore.load(account: account))
         XCTAssertEqual(makeStore().connections.count, 1)
+    }
+
+    /// Turning encryption off rewrites the file in plain text and leaves it
+    /// that way. The Keychain key alone would let a moment at an unlocked app
+    /// do that quietly.
+    func testTurningItOffNeedsThePassphrase() throws {
+        try store.enableEncryption(passphrase: passphrase)
+
+        XCTAssertThrowsError(try store.disableEncryption(passphrase: "not-the-passphrase")) {
+            XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
+        }
+
+        XCTAssertTrue(store.isEncrypted)
+        XCTAssertFalse(fileText.contains("192.168.0.228"), "the file must still be sealed")
+        XCTAssertNotNil(try KeychainKeyStore.load(account: account), "the key must still be there")
     }
 
     // MARK: - Export

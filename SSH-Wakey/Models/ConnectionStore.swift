@@ -196,8 +196,17 @@ final class ConnectionStore {
     }
 
     /// Writes the file back in plain text and removes the Keychain key.
-    func disableEncryption() throws {
-        guard isEncrypted, access == .open else { return }
+    ///
+    /// Asks for the passphrase, for the same reason changing it does. The
+    /// Keychain key alone would be enough to turn encryption off, which would
+    /// let a moment at an unlocked app quietly downgrade the file to plain text
+    /// and leave it that way without the owner noticing.
+    func disableEncryption(passphrase: String) throws {
+        guard isEncrypted, access == .open, let sealed = vault else { return }
+
+        // Throws .wrongPassphrase if it does not open the recovery slot.
+        _ = try VaultCrypto.dataKey(from: sealed, passphrase: passphrase)
+
         try fileStore.save(connections)
         try? KeychainKeyStore.delete(account: keychainAccount)
 

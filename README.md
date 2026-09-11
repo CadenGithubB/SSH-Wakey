@@ -211,7 +211,8 @@ again. Nothing can be edited while it is locked.
 format an unencrypted install uses, so it can be read by eye or put straight
 back. It is the copy to keep somewhere safe before you need it, and to keep out
 of shared folders. Turning encryption off does the same thing in place and
-removes the Keychain key.
+removes the Keychain key. Both that and changing the passphrase ask for the
+current passphrase first.
 
 Worth keeping in proportion. FileVault already encrypts this file whenever the
 Mac is off or locked, only your account can read it, and it holds no passwords
@@ -425,12 +426,12 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             202 tests
+SSH-WakeyTests/             203 tests
 ```
 
 ## Tests
 
-202 unit tests covering persistence and its file permissions, timestamps, change
+203 unit tests covering persistence and its file permissions, timestamps, change
 history, the encrypted file and both ways into it, appending to known_hosts, the per-row privacy toggle, which columns may be hidden and
 how the table layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the

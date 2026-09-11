@@ -147,11 +147,15 @@ a one-time event rather than a permanent downgrade to typing a passphrase.
 
 ### The limits of it
 
-- **Changing the passphrase asks for the current one.** The app already holds
-  the data key and could change it without asking. It asks anyway, because
-  otherwise a moment at an unlocked app would let someone set a passphrase of
-  their own and read the file at leisure later, turning a brief lapse into
-  lasting access.
+- **Changing the passphrase, and turning encryption off, both ask for it.** The
+  app already holds the data key and could do either without asking. It asks
+  anyway. Changing the passphrase would otherwise let someone set one of their
+  own and read the file at leisure later, turning a brief lapse into lasting
+  access. Turning encryption off would let them quietly downgrade the file to
+  plain text and leave it that way.
+- **Export deliberately does not ask.** It produces the same information that is
+  already on screen, so a passphrase there would stop nobody, and making the
+  backup harder would discourage the one thing that actually saves you.
 - **A passphrase you cannot produce is a file you cannot open.** There is no
   back door and no reset. Export before you need it, and keep the passphrase in a
   password manager.
