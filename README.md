@@ -106,6 +106,9 @@ longer fit and the table scrolls sideways instead of shrinking. Widths are
 stripped before saving, and the window cannot be made narrower than every column
 at its ideal width, so the default layout never scrolls sideways.
 
+Edit and Remove appear only when a connection is selected, rather than sitting
+there greyed out. The gear beside them opens Settings, where encryption lives.
+
 The **?** button opens **What SSH-Wakey does**: what it saves, how connecting and
 the password work, what reaching a Mac at the FileVault screen needs, and what
 the different failures mean.

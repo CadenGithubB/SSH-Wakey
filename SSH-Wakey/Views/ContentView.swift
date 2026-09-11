@@ -337,14 +337,17 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Button("Add") { sheet = .add }
                 .disabled(store.isLocked)
-            Button("Edit") {
-                if let connection = selectedConnection { sheet = .edit(connection) }
-            }
-            .disabled(selectedConnection == nil || store.isLocked)
 
-            Button("Remove") { removalTarget = selectedConnection }
-                .disabled(selectedConnection == nil || store.isLocked
-                          || selectedState.isConnected || selectedState.isConnecting)
+            // Edit and Remove are absent rather than dimmed when there is
+            // nothing to act on. A permanently greyed button is furniture.
+            if let connection = selectedConnection {
+                Button("Edit") { sheet = .edit(connection) }
+                    .disabled(store.isLocked)
+
+                Button("Remove") { removalTarget = connection }
+                    .disabled(store.isLocked || selectedState.isConnected
+                              || selectedState.isConnecting)
+            }
 
             Button {
                 sheet = .help
@@ -353,6 +356,12 @@ struct ContentView: View {
             }
             .buttonStyle(.borderless)
             .help("What SSH-Wakey does")
+
+            SettingsLink {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(.borderless)
+            .help("Settings")
 
             Spacer()
 
