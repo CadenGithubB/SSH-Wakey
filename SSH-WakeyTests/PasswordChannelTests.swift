@@ -25,11 +25,11 @@ final class PasswordChannelTests: XCTestCase {
             finished.fulfill()
         }
         wait(for: [finished], timeout: timeout)
-        return box.value
+        return box.value.flatMap { buffer in buffer.withBytes { Array($0) } }
     }
 
     private final class ResultBox: @unchecked Sendable {
-        var value: [UInt8]?
+        var value: SecureBuffer?
     }
 
     func testTheChannelHandsThePasswordToAValidRequest() throws {

@@ -51,6 +51,33 @@ still name a host, so it is a convenience, not a redaction guarantee.
 8. The app wipes the buffer with `memset_s` immediately after serving. When the
    attempt ends, the socket is unlinked and its directory removed.
 
+### When it is destroyed
+
+The password is gone before a session even exists. Nothing holds it once the
+login has happened: the open connection is kept alive by ssh itself, and the
+Terminal window that attaches to it authenticates against the running master
+rather than against the far end, so it never needs a password and never sees one.
+
+In the app, the plaintext lives in one `SecureBuffer`: raw heap memory, pinned
+with `mlock` so it can never be written to swap, and overwritten with `memset_s`
+when it is done with. It is wiped on four separate paths, so no ordering of
+success, failure, cancellation or crash-free teardown leaves it behind:
+
+- the instant it has been handed over, inside the channel;
+- when the channel is torn down at the end of the attempt;
+- in the `defer` that ends the connection attempt, whatever the outcome;
+- in `deinit`, as a backstop.
+
+In the helper, which is a separate short-lived process, the answer is read
+straight into a buffer of the same kind and wiped explicitly before `exit`.
+Explicitly, because `exit` does not run deferred blocks.
+
+Neither side lets the plaintext near a growing `Array`. That matters more than it
+sounds: an array that outgrows its storage copies itself somewhere new and frees
+the old block without overwriting it, leaving stale copies of the secret
+scattered through the heap that nothing will ever clean up. Both buffers are
+sized once, up front.
+
 ### Properties this gives
 
 - **No password on disk, ever.** No temporary file is created for it, so there is

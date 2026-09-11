@@ -298,7 +298,11 @@ final class AskpassChannel: @unchecked Sendable {
     /// from an askpass program on stdout.
     private func send(to client: Int32) {
         password.withBytes { bytes in
-            var payload = [UInt8](bytes)
+            // Sized once, so appending the newline cannot make the array move
+            // and leave a stale copy of the password behind in freed memory.
+            var payload = [UInt8]()
+            payload.reserveCapacity(bytes.count + 1)
+            payload.append(contentsOf: bytes)
             payload.append(0x0A)
             payload.withUnsafeBytes { raw in
                 var offset = 0

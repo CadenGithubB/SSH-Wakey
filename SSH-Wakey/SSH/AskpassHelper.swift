@@ -41,11 +41,13 @@ enum AskpassHelper {
         signal(SIGPIPE, SIG_IGN)
 
         guard let answer = fetch(request), !answer.isEmpty else { exit(1) }
+
         var failed = false
-        answer.withUnsafeBufferPointer { buffer in
+        answer.withBytes { buffer in
             var offset = 0
             while offset < buffer.count {
-                let written = write(STDOUT_FILENO, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
+                let written = write(
+                    STDOUT_FILENO, buffer.baseAddress!.advanced(by: offset), buffer.count - offset)
                 if written > 0 {
                     offset += written
                     continue
@@ -55,12 +57,17 @@ enum AskpassHelper {
                 break
             }
         }
+
+        // exit() does not run deferred blocks, so this cannot be a defer. The
+        // process is about to end either way, but the plaintext should not
+        // outlive its last use even by that much.
+        answer.wipe()
         exit(failed ? 1 : 0)
     }
 
     /// Internal rather than private so the unit tests can drive the client half
     /// of the protocol without launching a second process.
-    static func fetch(_ request: Request) -> [UInt8]? {
+    static func fetch(_ request: Request) -> SecureBuffer? {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
@@ -94,21 +101,23 @@ enum AskpassHelper {
         guard offset == payload.count else { return nil }
         shutdown(descriptor, SHUT_WR)
 
-        var collected = [UInt8]()
-        var chunk = [UInt8](repeating: 0, count: 512)
-        while collected.count < AskpassProtocol.maxResponseBytes {
-            let count = chunk.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
-            if count > 0 {
-                collected.append(contentsOf: chunk[0..<count])
+        // Read straight into locked memory, sized once. The password never
+        // touches a growing array and is never copied on the way.
+        let answer = SecureBuffer(capacity: AskpassProtocol.maxResponseBytes)
+        while true {
+            let received = answer.withFreeSpace { space -> Int in
+                read(descriptor, space.baseAddress, space.count)
+            }
+            guard let received else { break }   // full
+            if received > 0 {
+                answer.advance(by: received)
                 continue
             }
-            if count == 0 { break }
+            if received == 0 { break }          // the app closed the socket
             if errno == EINTR { continue }
+            answer.wipe()
             return nil
         }
-        chunk.withUnsafeMutableBytes { buffer in
-            if let address = buffer.baseAddress { memset_s(address, buffer.count, 0, buffer.count) }
-        }
-        return collected
+        return answer
     }
 }

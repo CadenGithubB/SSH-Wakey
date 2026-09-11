@@ -47,6 +47,42 @@ final class SecureBuffer: @unchecked Sendable {
         bytes.removeAll(keepingCapacity: false)
     }
 
+    /// An empty locked buffer of a fixed size, to be filled in place.
+    ///
+    /// A growing `Array` is the wrong shape for a secret: every time it outgrows
+    /// its storage it copies itself somewhere new and frees the old block
+    /// without overwriting it, leaving stale copies of the plaintext scattered
+    /// through the heap. Allocating the whole thing once avoids that entirely.
+    init(capacity: Int) {
+        allocated = max(capacity, 1)
+        let pointer = UnsafeMutableRawPointer.allocate(byteCount: allocated, alignment: 1)
+        isPinned = mlock(pointer, allocated) == 0
+        memset_s(pointer, allocated, 0, allocated)
+        base = pointer
+        count = 0
+    }
+
+    /// How many bytes have been written so far.
+    var byteCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return count
+    }
+
+    /// Hands over the unwritten tail, so bytes can be read straight into place.
+    /// Returns nil once wiped, or when the buffer is full.
+    func withFreeSpace<R>(_ body: (UnsafeMutableRawBufferPointer) throws -> R) rethrows -> R? {
+        lock.lock(); defer { lock.unlock() }
+        guard let base, count < allocated else { return nil }
+        return try body(UnsafeMutableRawBufferPointer(
+            start: base.advanced(by: count), count: allocated - count))
+    }
+
+    /// Confirms how much of the free space was just filled.
+    func advance(by written: Int) {
+        lock.lock(); defer { lock.unlock() }
+        count = min(count + max(written, 0), allocated)
+    }
+
     var isEmpty: Bool {
         lock.lock(); defer { lock.unlock() }
         return base == nil || count == 0

@@ -266,7 +266,9 @@ What that avoids:
   confirmation or a key passphrase.
 
 The password is copied out of the text field into a buffer the app can overwrite,
-and that buffer is zeroed as soon as it has been served. `SECURITY.md` covers the
+pinned with `mlock` so it never reaches swap, and zeroed as soon as it has been
+served. It is gone before a session exists: the open connection is held by ssh,
+and the Terminal window that attaches to it never needs a password. `SECURITY.md` covers the
 model, and its limits, properly.
 
 ### One password, one attempt
@@ -420,12 +422,12 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             177 tests
+SSH-WakeyTests/             181 tests
 ```
 
 ## Tests
 
-177 unit tests covering persistence and its file permissions, timestamps, change
+181 unit tests covering persistence and its file permissions, timestamps, change
 history, the encrypted file and both ways into it, the per-row privacy toggle, which columns may be hidden and
 how the table layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the
