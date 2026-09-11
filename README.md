@@ -85,12 +85,15 @@ first when sessions are open.
 The list shows when each connection was added and last edited. Open **Edit** to
 see the full change history for one: what changed, and when.
 
-Each row has its own **eye** button, beside the status dot on the left. It hides
-that connection's username, address, extra arguments and dates behind bullets,
-for screen sharing or a busy office. It is per connection, it sticks, and it is a
-display setting only: nothing about what is saved changes. Right-clicking a row
-offers the same thing. The password sheet always shows the real destination,
-because confirming where a password is about to go is the point of that sheet.
+Usernames, addresses, extra arguments and dates are masked in the list. The
+**eye** beside each row's status dot reveals that one, and hides whichever was
+revealed before, so at most one machine is ever readable at a glance. Names are
+always shown, since that is how you pick one. Right-clicking a row offers the
+same thing.
+
+It is a display setting and nothing more. Nothing about what is saved changes,
+and the password sheet always shows the real destination, because confirming
+where a password is about to go is the point of that sheet.
 
 **Port** and **Extra arguments** are optional columns. Switch them off from the
 sliders button in the top-left corner of the table header, above the status dot,
@@ -107,7 +110,7 @@ stripped before saving, and the window cannot be made narrower than every column
 at its ideal width, so the default layout never scrolls sideways.
 
 Edit and Remove appear only when a connection is selected, rather than sitting
-there greyed out. The gear beside them opens Settings, where encryption lives.
+there greyed out, and both are refused while that machine has a session open. The gear beside them opens Settings, where encryption lives.
 
 The **?** button opens **What SSH-Wakey does**: what it saves, how connecting and
 the password work, what reaching a Mac at the FileVault screen needs, and what
@@ -149,7 +152,6 @@ Pretty-printed JSON written through `Codable`:
     {
       "createdAt" : "2026-09-11T09:14:02Z",
       "extraArguments" : "-o ServerAliveInterval=30",
-      "hidesDetails" : false,
       "host" : "192.168.1.24",
       "id" : "7C6C1E5E-...",
       "modifiedAt" : "2026-09-12T18:03:41Z",
@@ -437,14 +439,14 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             209 tests
+SSH-WakeyTests/             204 tests
 ```
 
 ## Tests
 
-209 unit tests covering persistence and its file permissions, timestamps, change
-history, the encrypted file and both ways into it, appending to known_hosts, the per-row privacy toggle, which columns may be hidden and
-how the table layout is saved, field and argument validation, command construction, failure
+204 unit tests covering persistence and its file permissions, timestamps, change
+history, the encrypted file and both ways into it, appending to known_hosts, which columns may be hidden and how the table
+layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the
 password buffer, the Terminal handoff script, and the password channel itself. The channel tests run the real client code against the real
 server code in process, including the cases where it must refuse: a bad token, a

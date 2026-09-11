@@ -14,15 +14,15 @@ Connection metadata, and nothing else:
 ```
 
 Name, username, host, port, extra `ssh` arguments, the host key policy flag, the
-dates the entry was added and last edited, whether its row is hidden in the
-list, and a capped list of what changed on each edit. The folder is `0700`, the file is `0600`, and permissions are
+dates the entry was added and last edited, and a capped list of what changed on
+each edit. The folder is `0700`, the file is `0600`, and permissions are
 reapplied after each atomic write. There is no password field, no key material,
 no passphrase, and no token of any kind in that file or anywhere else on disk.
 
 Two things about the change history are worth saying plainly. It keeps previous
 values, so an old hostname or username stays in the file after you change it;
-delete the connection to be rid of them. And the per-row eye button only
-hides that connection's details on screen. It is there for screen sharing and
+delete the connection to be rid of them. And the per-row eye only reveals one
+connection's details on screen at a time. It is there for screen sharing and
 shoulder surfing, it does not encrypt or obscure anything on disk, the file still
 contains the real values, and the password sheet deliberately ignores it so you
 can always see where a password is about to go. Error text quoted from ssh can

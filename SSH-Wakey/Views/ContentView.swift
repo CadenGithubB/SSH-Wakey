@@ -11,7 +11,11 @@ struct ContentView: View {
     @State private var sheet: SheetKind?
     @State private var removalTarget: SSHConnection?
     @State private var showsColumnPicker = false
-    @State private var metrics = HeaderMetrics()
+
+    /// The one row whose details are on show. Everything else is masked, and
+    /// revealing a row hides whichever was revealed before, so at most one
+    /// machine's username and address is ever readable at a glance.
+    @State private var revealedRow: SSHConnection.ID?
 
     /// What Connect does. Unlocking is the default, because getting a machine
     /// past its FileVault screen is the job this app exists for, and that needs
@@ -56,7 +60,7 @@ struct ContentView: View {
                 state: selectedState,
                 storageError: store.storageError,
                 actionError: sessions.lastActionError,
-                redactsAddresses: selectedConnection?.hidesDetails ?? false,
+                redactsAddresses: !isRevealed(selection),
                 onCancel: { if let id = selection { sessions.cancelConnect(id) } },
                 onReviewHostKey: { if let connection = selectedConnection { sheet = .hostKey(connection) } },
                 onShowHelp: { sheet = .help })
@@ -87,7 +91,7 @@ struct ContentView: View {
         } message: { target in
             // Named rather than addressed when the row is hidden, so confirming
             // a deletion does not put the address back on screen.
-            let described = target.hidesDetails ? "“\(target.name)”" : target.displayDestination
+            let described = isRevealed(target.id) ? target.displayDestination : "“\(target.name)”"
             Text("This removes the saved details for \(described) from this Mac, along with its "
                  + "history. Nothing on that machine is changed.")
         }
@@ -122,11 +126,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
         } else {
-            table.overlay(alignment: .topLeading) {
-                columnsMenu
-                    .offset(x: (metrics.statusColumnCenterX ?? Column.status.idealWidth / 2)
-                            - Column.status.idealWidth / 2)
-            }
+            table.overlay(alignment: .topLeading) { columnsMenu }
         }
     }
 
@@ -193,14 +193,14 @@ struct ContentView: View {
             .disabledCustomizationBehavior(.visibility)
 
             TableColumn("Username") { (connection: SSHConnection) in
-                DetailCell(value: connection.username, isHidden: connection.hidesDetails)
+                DetailCell(value: connection.username, isHidden: !isRevealed(connection.id))
             }
             .width(min: Column.username.minimumWidth, ideal: Column.username.idealWidth)
             .customizationID(Column.username.id)
             .disabledCustomizationBehavior(.visibility)
 
             TableColumn("Host") { (connection: SSHConnection) in
-                DetailCell(value: connection.host, isHidden: connection.hidesDetails, monospaced: true)
+                DetailCell(value: connection.host, isHidden: !isRevealed(connection.id), monospaced: true)
             }
             .width(min: Column.host.minimumWidth, ideal: Column.host.idealWidth)
             .customizationID(Column.host.id)
@@ -213,7 +213,7 @@ struct ContentView: View {
             .customizationID(Column.port.id)
 
             TableColumn("Extra arguments") { (connection: SSHConnection) in
-                DetailCell(value: connection.extraArguments, isHidden: connection.hidesDetails,
+                DetailCell(value: connection.extraArguments, isHidden: !isRevealed(connection.id),
                            monospaced: true, dimmed: true)
             }
             .width(min: Column.arguments.minimumWidth, ideal: Column.arguments.idealWidth)
@@ -221,7 +221,7 @@ struct ContentView: View {
 
             TableColumn("Added") { (connection: SSHConnection) in
                 DetailCell(value: Self.shortDate(connection.createdAt),
-                           isHidden: connection.hidesDetails && connection.createdAt != nil,
+                           isHidden: !isRevealed(connection.id) && connection.createdAt != nil,
                            dimmed: true)
                     .help(Self.relativeDate(connection.createdAt))
             }
@@ -231,7 +231,7 @@ struct ContentView: View {
 
             TableColumn("Last edited") { (connection: SSHConnection) in
                 DetailCell(value: Self.shortDate(connection.modifiedAt),
-                           isHidden: connection.hidesDetails && connection.modifiedAt != nil,
+                           isHidden: !isRevealed(connection.id) && connection.modifiedAt != nil,
                            dimmed: true)
                     .help(Self.relativeDate(connection.modifiedAt))
             }
@@ -245,8 +245,10 @@ struct ContentView: View {
                     activate(connection)
                 }
                 Button("Edit…") { sheet = .edit(connection) }
-                Button(connection.hidesDetails ? "Show Details" : "Hide Details") {
-                    store.setDetailsHidden(!connection.hidesDetails, for: id)
+                    .disabled(sessions.state(for: id).isConnected
+                              || sessions.state(for: id).isConnecting)
+                Button(isRevealed(id) ? "Hide Details" : "Show Details") {
+                    toggleReveal(id)
                 }
                 Divider()
                 Button("Remove…", role: .destructive) { removalTarget = connection }
@@ -262,20 +264,31 @@ struct ContentView: View {
         }
     }
 
-    /// Per-row privacy toggle, beside the status dot.
+    func isRevealed(_ id: SSHConnection.ID?) -> Bool {
+        guard let id else { return false }
+        return revealedRow == id
+    }
+
+    /// Reveals one row and hides whatever was revealed before.
+    private func toggleReveal(_ id: SSHConnection.ID) {
+        revealedRow = revealedRow == id ? nil : id
+    }
+
+    /// Per-row reveal, beside the status dot.
     private func hideButton(for connection: SSHConnection) -> some View {
-        Button {
-            store.setDetailsHidden(!connection.hidesDetails, for: connection.id)
+        let shown = isRevealed(connection.id)
+        return Button {
+            toggleReveal(connection.id)
         } label: {
-            Image(systemName: connection.hidesDetails ? "eye.slash" : "eye")
+            Image(systemName: shown ? "eye.slash" : "eye")
                 .font(.system(size: 11))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(shown ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(connection.hidesDetails
-              ? "Show this connection's username, address and dates"
-              : "Hide this connection's username, address and dates")
+        .help(shown
+              ? "Hide this connection's username, address and dates"
+              : "Show this one, and hide whichever is showing now")
     }
 
     /// Bound to the menu, and to the same state the header's own right-click
@@ -349,7 +362,8 @@ struct ContentView: View {
             // nothing to act on. A permanently greyed button is furniture.
             if let connection = selectedConnection {
                 Button("Edit") { sheet = .edit(connection) }
-                    .disabled(store.isLocked)
+                    .disabled(store.isLocked || selectedState.isConnected
+                              || selectedState.isConnecting)
 
                 Button("Remove") { removalTarget = connection }
                     .disabled(store.isLocked || selectedState.isConnected
@@ -622,65 +636,4 @@ enum Column: String, CaseIterable, Identifiable {
     /// ideal width. That is what keeps the default layout from scrolling
     /// sideways, whatever the table decides to do with the widths.
     static var minimumWindowWidth: CGFloat { totalIdealWidth + tableChrome }
-}
-
-
-/// Where the table actually put its first column.
-///
-/// SwiftUI does not expose a `Table`'s internal geometry, and the first column
-/// does not begin at the table's leading edge: there is an inset in front of it.
-/// Guessing that offset put the header button visibly off-centre, so it is
-/// measured instead.
-@MainActor
-@Observable
-final class HeaderMetrics {
-    /// The horizontal centre of the first column, in the table's own
-    /// coordinates. Nil until the table has been laid out.
-    var statusColumnCenterX: CGFloat?
-}
-
-/// Fills the table, finds the `NSTableView` underneath it, and asks AppKit
-/// where the first column is.
-///
-/// It has to live in an overlay rather than inside a cell. A representable
-/// placed in a `TableColumn`'s content is never instantiated at all, so nothing
-/// there can measure anything.
-private struct TableGeometryProbe: NSViewRepresentable {
-    let metrics: HeaderMetrics
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { measure(from: view) }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { measure(from: nsView) }
-    }
-
-    private func measure(from view: NSView) {
-        guard let table = tableNear(view) else { return }
-        // convert(_:from:) settles the inset, any content inset and the scroll
-        // position together, rather than assuming all three are zero.
-        let centre = view.convert(table.rect(ofColumn: 0), from: table).midX
-        guard centre > 0, metrics.statusColumnCenterX != centre else { return }
-        metrics.statusColumnCenterX = centre
-    }
-
-    private func tableNear(_ view: NSView) -> NSTableView? {
-        var ancestor: NSView? = view
-        while let current = ancestor {
-            if let found = firstTable(in: current) { return found }
-            ancestor = current.superview
-        }
-        return nil
-    }
-
-    private func firstTable(in view: NSView) -> NSTableView? {
-        if let table = view as? NSTableView, table.numberOfColumns > 0 { return table }
-        for subview in view.subviews {
-            if let found = firstTable(in: subview) { return found }
-        }
-        return nil
-    }
 }

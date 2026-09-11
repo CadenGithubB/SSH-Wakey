@@ -117,6 +117,8 @@ final class SSHCommandBuilderTests: XCTestCase {
             XCTAssertFalse(mode.title.isEmpty)
             XCTAssertFalse(mode.explanation.isEmpty)
         }
+        // The label has to say what the button will actually do.
+        XCTAssertEqual(ConnectMode.unlock.title, "Connect, Unlock, then disconnect")
     }
 
     func testControlCommandsTargetTheSameSocket() {

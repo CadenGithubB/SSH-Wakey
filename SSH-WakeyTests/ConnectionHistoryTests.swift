@@ -120,59 +120,6 @@ final class ConnectionHistoryTests: XCTestCase {
         XCTAssertTrue(loaded.revisions.isEmpty)
     }
 
-    // MARK: - The per-row privacy toggle
-
-    func testDetailsAreVisibleUntilHidden() {
-        XCTAssertFalse(SSHConnection().hidesDetails)
-    }
-
-    func testHidingOneRowIsSavedAndDoesNotCountAsAnEdit() throws {
-        store.add(makeConnection())
-        let before = try XCTUnwrap(store.connections.first)
-
-        store.setDetailsHidden(true, for: before.id)
-
-        let hidden = try XCTUnwrap(store.connections.first)
-        XCTAssertTrue(hidden.hidesDetails)
-        XCTAssertEqual(hidden.modifiedAt, before.modifiedAt, "hiding a row is not an edit")
-        XCTAssertTrue(hidden.revisions.isEmpty, "hiding a row does not belong in the change log")
-
-        let reloaded = ConnectionStore(fileStore: ConnectionFileStore(directoryURL: directory))
-        XCTAssertTrue(reloaded.connections.first?.hidesDetails ?? false)
-    }
-
-    func testHidingIsPerConnection() throws {
-        store.add(makeConnection())
-        store.add(SSHConnection(name: "Build box", username: "ci", host: "10.0.0.7"))
-
-        let first = try XCTUnwrap(store.connections.first { $0.name == "Studio Mac" })
-        store.setDetailsHidden(true, for: first.id)
-
-        XCTAssertTrue(store.connections.first { $0.name == "Studio Mac" }?.hidesDetails ?? false)
-        XCTAssertFalse(store.connections.first { $0.name == "Build box" }?.hidesDetails ?? true)
-    }
-
-    func testEditingAConnectionKeepsItHidden() throws {
-        store.add(makeConnection())
-        var connection = try XCTUnwrap(store.connections.first)
-        store.setDetailsHidden(true, for: connection.id)
-
-        connection.host = "10.0.0.9"
-        store.update(connection)
-
-        XCTAssertTrue(store.connections.first?.hidesDetails ?? false)
-    }
-
-    func testAConnectionFromAnOlderBuildIsNotHidden() throws {
-        let fileStore = ConnectionFileStore(directoryURL: directory)
-        try fileStore.createDirectoryIfNeeded()
-        try Data("""
-        {"version":1,"connections":[{"name":"Old","username":"morgan","host":"10.0.0.9"}]}
-        """.utf8).write(to: fileStore.fileURL)
-
-        XCTAssertFalse(try XCTUnwrap(fileStore.load().first).hidesDetails)
-    }
-
     func testANewConnectionDoesNotGuessTheUsername() {
         XCTAssertEqual(SSHConnection().username, "",
                        "the account on the remote machine is rarely the one on this Mac")

@@ -11,7 +11,7 @@ enum ConnectMode: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .unlock: return "Unlock, then disconnect"
+        case .unlock: return "Connect, Unlock, then disconnect"
         case .session: return "Open a session"
         }
     }

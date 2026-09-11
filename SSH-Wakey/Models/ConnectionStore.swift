@@ -115,7 +115,6 @@ final class ConnectionStore {
         let previous = connections[index]
 
         var updated = connection.normalized
-        updated.hidesDetails = previous.hidesDetails
         updated.createdAt = previous.createdAt
         updated.revisions = previous.revisions
 
@@ -133,16 +132,6 @@ final class ConnectionStore {
         }
 
         connections[index] = updated
-        sortAndSave()
-    }
-
-    /// Toggles the per-row display setting. It is not an edit: it does not
-    /// touch the modified date and it does not appear in the change history.
-    func setDetailsHidden(_ hidden: Bool, for id: SSHConnection.ID) {
-        guard access == .open,
-              let index = connections.firstIndex(where: { $0.id == id }),
-              connections[index].hidesDetails != hidden else { return }
-        connections[index].hidesDetails = hidden
         sortAndSave()
     }
 

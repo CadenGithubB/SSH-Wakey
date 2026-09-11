@@ -39,11 +39,6 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
     /// instead of being trusted automatically.
     var strictHostKeyChecking: Bool
 
-    /// Hides this row's username, address, arguments and dates in the list.
-    /// A display setting for screen sharing, not a security measure, and
-    /// deliberately not part of the change history.
-    var hidesDetails: Bool
-
     /// Nil for a connection saved by a build that did not record dates yet.
     /// Left nil rather than invented, so the window can say it does not know.
     var createdAt: Date?
@@ -58,7 +53,6 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
         port: Int = SSHConnection.defaultPort,
         extraArguments: String = "",
         strictHostKeyChecking: Bool = true,
-        hidesDetails: Bool = false,
         createdAt: Date? = nil,
         modifiedAt: Date? = nil,
         revisions: [ConnectionRevision] = []
@@ -70,7 +64,6 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
         self.port = port
         self.extraArguments = extraArguments
         self.strictHostKeyChecking = strictHostKeyChecking
-        self.hidesDetails = hidesDetails
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
         self.revisions = revisions
@@ -125,7 +118,7 @@ extension SSHConnection {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, username, host, port, extraArguments, strictHostKeyChecking
-        case hidesDetails, createdAt, modifiedAt, revisions
+        case createdAt, modifiedAt, revisions
     }
 
     /// Decoding tolerates files written by an older build that did not have
@@ -139,7 +132,6 @@ extension SSHConnection {
         port = try container.decodeIfPresent(Int.self, forKey: .port) ?? SSHConnection.defaultPort
         extraArguments = try container.decodeIfPresent(String.self, forKey: .extraArguments) ?? ""
         strictHostKeyChecking = try container.decodeIfPresent(Bool.self, forKey: .strictHostKeyChecking) ?? true
-        hidesDetails = try container.decodeIfPresent(Bool.self, forKey: .hidesDetails) ?? false
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
         modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt)
         revisions = try container.decodeIfPresent([ConnectionRevision].self, forKey: .revisions) ?? []
