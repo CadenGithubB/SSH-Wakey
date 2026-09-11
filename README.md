@@ -338,9 +338,14 @@ costs one failed attempt per method offered, not a loop.
 - **Interactive password and keyboard-interactive only.** If a server offers a
   key you already have, `ssh` uses it and the typed password is never sent; the
   app says so.
-- **No two-factor or multi-prompt login.** A challenge such as `Verification
-  code:` is not a password prompt, so it goes unanswered and the attempt fails
-  with an explanation.
+- **One password prompt, and nothing else.** SSH carries multi-step logins
+  through its keyboard-interactive method, which is a general question-and-answer
+  channel rather than a password field: a one-time code, a push notification, a
+  forced password change. SSH-Wakey answers a single password prompt and refuses
+  every other question, so a server that asks a second one fails with an
+  explanation rather than hanging. A stock Mac asks only for the password, since
+  its PAM stack is `pam_opendirectory` and the optional modules reuse what was
+  already given. This is about hardened servers and jump hosts.
 - **Keys and passphrases are never handled.** SSH-Wakey does not create, read,
   unlock or store private keys. Use `ssh-agent` if you want key auth.
 - **Host keys are your own.** The app uses your `~/.ssh/known_hosts`. With
