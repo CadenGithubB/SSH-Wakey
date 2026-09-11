@@ -343,9 +343,13 @@ costs one failed attempt per method offered, not a loop.
   channel rather than a password field: a one-time code, a push notification, a
   forced password change. SSH-Wakey answers a single password prompt and refuses
   every other question, so a server that asks a second one fails with an
-  explanation rather than hanging. A stock Mac asks only for the password, since
-  its PAM stack is `pam_opendirectory` and the optional modules reuse what was
-  already given. This is about hardened servers and jump hosts.
+  explanation rather than hanging.
+
+  It is built for password logins to machines that ask once, which is what a
+  stock macOS `sshd` does: the only required module in its PAM stack is
+  `pam_opendirectory`, and the optional ones reuse the password already given
+  rather than asking again. If you need multi-step authentication, open an issue
+  or send a pull request and it can go in.
 - **Keys and passphrases are never handled.** SSH-Wakey does not create, read,
   unlock or store private keys. Use `ssh-agent` if you want key auth.
 - **Host keys are your own.** The app uses your `~/.ssh/known_hosts`. With
