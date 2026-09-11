@@ -338,18 +338,13 @@ costs one failed attempt per method offered, not a loop.
 - **Interactive password and keyboard-interactive only.** If a server offers a
   key you already have, `ssh` uses it and the typed password is never sent; the
   app says so.
-- **One password prompt, and nothing else.** SSH carries multi-step logins
-  through its keyboard-interactive method, which is a general question-and-answer
-  channel rather than a password field: a one-time code, a push notification, a
-  forced password change. SSH-Wakey answers a single password prompt and refuses
-  every other question, so a server that asks a second one fails with an
-  explanation rather than hanging.
-
-  It is built for password logins to machines that ask once, which is what a
-  stock macOS `sshd` does: the only required module in its PAM stack is
-  `pam_opendirectory`, and the optional ones reuse the password already given
-  rather than asking again. If you need multi-step authentication, open an issue
-  or send a pull request and it can go in.
+- **One password prompt, and nothing else.** SSH can carry a multi-step login
+  through its keyboard-interactive method: a one-time code, a push notification,
+  or a forced password change. SSH-Wakey answers a single password prompt and
+  refuses every other question, so a server that asks a second one fails with an
+  explanation rather than hanging. It is built for password logins to machines
+  that ask once. If you need multi-step authentication, open an issue or send a
+  pull request and it can go in.
 - **Keys and passphrases are never handled.** SSH-Wakey does not create, read,
   unlock or store private keys. Use `ssh-agent` if you want key auth.
 - **Host keys are your own.** The app uses your `~/.ssh/known_hosts`. With
