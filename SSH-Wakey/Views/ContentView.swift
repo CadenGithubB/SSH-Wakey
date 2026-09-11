@@ -100,8 +100,29 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
         } else {
-            table
+            table.overlay(alignment: .topLeading) { columnsMenu }
         }
+    }
+
+    /// Sits in the header cell above the status dot and the eye, which is the
+    /// one column with no title of its own.
+    private var columnsMenu: some View {
+        Menu {
+            Section("Optional columns") {
+                ForEach(Column.optional) { column in
+                    Toggle(column.title, isOn: visibility(of: column))
+                }
+            }
+        } label: {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: Column.status.idealWidth, height: Column.headerHeight)
+        .contentShape(Rectangle())
+        .help("Choose which columns to show. Name, Username, Host and the dates always show.")
     }
 
     private var table: some View {
@@ -280,28 +301,13 @@ struct ContentView: View {
             Button("Remove") { removalTarget = selectedConnection }
                 .disabled(selectedConnection == nil || selectedState.isConnected || selectedState.isConnecting)
 
-            Menu {
-                Section("Optional columns") {
-                    ForEach(Column.optional) { column in
-                        Toggle(column.title, isOn: visibility(of: column))
-                    }
-                }
-            } label: {
-                Image(systemName: "tablecells")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(store.connections.isEmpty)
-            .help("Choose which columns to show. Name, Username, Host and the dates always show.")
-
             Button {
                 sheet = .help
             } label: {
                 Image(systemName: "questionmark.circle")
             }
             .buttonStyle(.borderless)
-            .help("Why can't I connect?")
+            .help("What SSH-Wakey does")
 
             Spacer()
 
@@ -521,6 +527,10 @@ enum Column: String, CaseIterable, Identifiable {
 
     static var totalIdealWidth: CGFloat { allCases.reduce(0) { $0 + $1.idealWidth } }
     static var totalMinimumWidth: CGFloat { allCases.reduce(0) { $0 + $1.minimumWidth } }
+
+    /// The height of the table's header row, which is where the column menu
+    /// sits. This is the standard macOS table header height.
+    static let headerHeight: CGFloat = 24
 
     /// What the table needs beyond the columns themselves: the window frame,
     /// the scroll view's insets, and the gap between each pair of columns.

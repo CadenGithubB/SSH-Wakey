@@ -57,7 +57,7 @@ struct StatusPanel: View {
                                     .controlSize(.small)
                             }
                             if failure.offersBootHelp {
-                                Button("Why can't I connect?", action: onShowHelp)
+                                Button("What SSH-Wakey does", action: onShowHelp)
                                     .controlSize(.small)
                             }
                             if failure.detail != nil {

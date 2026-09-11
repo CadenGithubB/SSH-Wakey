@@ -74,8 +74,8 @@ offers the same thing. The password sheet always shows the real destination,
 because confirming where a password is about to go is the point of that sheet.
 
 **Port** and **Extra arguments** are optional columns. Switch them off from the
-columns button at the bottom of the window, or by right-clicking the table
-header. Name, Username, Host, Added and Last edited always show, because a row
+sliders button in the top-left corner of the table header, above the status dot,
+or by right-clicking the table header. Name, Username, Host, Added and Last edited always show, because a row
 that cannot tell you which machine it is or who it logs in as is not worth
 showing.
 
@@ -86,6 +86,10 @@ window happened to be that day; reopened in a smaller window, those widths no
 longer fit and the table scrolls sideways instead of shrinking. Widths are
 stripped before saving, and the window cannot be made narrower than every column
 at its ideal width, so the default layout never scrolls sideways.
+
+The **?** button opens **What SSH-Wakey does**: what it saves, how connecting and
+the password work, what reaching a Mac at the FileVault screen needs, and what
+the different failures mean.
 
 The **i** button beside the extra arguments field lists the `ssh` options worth
 knowing, with a line each on what they do, and says what SSH-Wakey refuses.
@@ -294,8 +298,8 @@ These work on any version of macOS.
   device management tool reaches the startup screen directly. An SSH client
   cannot.
 
-All of this is in the app as well, behind the **?** button and the "Why can't I
-connect?" link that appears when a connection fails.
+All of this is in the app as well, under **What SSH-Wakey does**, behind the **?**
+button and the link that appears when a connection fails.
 
 Sources for the Tahoe behaviour: [Jeff Geerling on managing FileVault Macs
 remotely in Tahoe](https://www.jeffgeerling.com/blog/2025/you-can-finally-manage-macs-filevault-remotely-tahoe/)
