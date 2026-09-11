@@ -63,22 +63,35 @@ struct HostKeyApprovalView: View {
     private var content: some View {
         switch phase {
         case .loading:
-            HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
-                Text("Asking \(connection.host) for its host key…")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Asking \(connection.host) for its host key…")
+                        .foregroundStyle(.secondary)
+                }
+                Text("It tries a few times, so give it a moment.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
         case .failed(let message):
-            Label {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(message).fixedSize(horizontal: false, vertical: true)
-                    Text("If the machine has only just restarted, it may not be running its SSH server yet.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                Label {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(message).fixedSize(horizontal: false, vertical: true)
+                        Text("If the machine has only just restarted, it may not be running its "
+                             + "SSH server yet.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                 }
-            } icon: {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+
+                Button("Try Again") {
+                    phase = .loading
+                    Task { await load() }
+                }
             }
 
         case .ready(let keys):

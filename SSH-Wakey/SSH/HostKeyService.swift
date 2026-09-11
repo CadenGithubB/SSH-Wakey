@@ -29,7 +29,14 @@ enum HostKeyService {
             case .scanFailed(let reason):
                 return "The host key could not be fetched: \(reason)"
             case .noKeysOffered(let host):
-                return "\(host) did not offer a host key. It may not be running an SSH server."
+                var text = "\(host) did not answer with a host key. It may not be running an SSH "
+                    + "server yet, or it may not be reachable from here."
+                if NetworkScope.isLocal(host) {
+                    text += " The first approach to a machine on your own network is also the one "
+                        + "macOS interrupts with its permission prompt, and that attempt fails "
+                        + "while the prompt is on screen. If you have just answered it, try again."
+                }
+                return text
             case .notWritten(let reason):
                 return "known_hosts could not be updated: \(reason)"
             }
@@ -41,13 +48,38 @@ enum HostKeyService {
             .appendingPathComponent(".ssh/known_hosts")
     }
 
+    /// How many times to ask before giving up.
+    static let scanAttempts = 3
+
+    /// Asks the machine for its host keys, retrying a couple of times.
+    ///
+    /// One attempt is not enough in practice. A first approach to a machine
+    /// fails for several reasons that clear by themselves: the address has not
+    /// been resolved yet, a route is cold, or macOS is holding up the
+    /// connection behind its local network permission prompt. All of those
+    /// succeed on a second try a moment later.
     static func scan(host: String, port: Int) async throws -> [HostKeyCandidate] {
+        var lastError: Error = HostKeyError.noKeysOffered(host)
+
+        for attempt in 1...scanAttempts {
+            do {
+                return try await scanOnce(host: host, port: port)
+            } catch {
+                lastError = error
+                guard attempt < scanAttempts else { break }
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
+            }
+        }
+        throw lastError
+    }
+
+    private static func scanOnce(host: String, port: Int) async throws -> [HostKeyCandidate] {
         let scan: ProcessResult
         do {
             scan = try await ProcessRunner.run(
                 executable: "/usr/bin/ssh-keyscan",
-                arguments: ["-T", "5", "-p", String(port), host],
-                timeout: 20)
+                arguments: ["-T", "8", "-p", String(port), host],
+                timeout: 15)
         } catch {
             throw HostKeyError.scanFailed(error.localizedDescription)
         }

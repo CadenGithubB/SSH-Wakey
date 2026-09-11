@@ -109,6 +109,31 @@ final class HostKeyWritingTests: XCTestCase {
         }
     }
 
+    // MARK: - Failure messages
+
+    /// The first approach to a machine on the local network is the one macOS
+    /// interrupts with its permission prompt, and that attempt fails. Saying so
+    /// turns a dead end into something the reader can act on.
+    func testAFailureOnTheLocalNetworkNamesThePermissionPrompt() throws {
+        let message = try XCTUnwrap(
+            HostKeyService.HostKeyError.noKeysOffered("192.168.22.109").errorDescription)
+
+        XCTAssertTrue(message.contains("permission prompt"), message)
+        XCTAssertTrue(message.contains("try again"), message)
+    }
+
+    func testAFailureOnAPublicHostDoesNotBlameThePrompt() throws {
+        let message = try XCTUnwrap(
+            HostKeyService.HostKeyError.noKeysOffered("build.example.com").errorDescription)
+
+        XCTAssertFalse(message.contains("permission prompt"), message)
+        XCTAssertTrue(message.contains("SSH server"), message)
+    }
+
+    func testItAsksMoreThanOnceBeforeGivingUp() {
+        XCTAssertGreaterThan(HostKeyService.scanAttempts, 1)
+    }
+
     func testOneBadLineStopsTheWholeWrite() throws {
         try Data("existing ssh-rsa AAAAB3NzaC1yc2E\n".utf8).write(to: knownHosts)
 
