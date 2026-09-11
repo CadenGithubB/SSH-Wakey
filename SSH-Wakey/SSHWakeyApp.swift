@@ -7,13 +7,22 @@ struct SSHWakeyApp: App {
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    // Owned here rather than in the window, because the Settings scene works on
+    // the same store.
+    @State private var store = ConnectionStore()
+    @State private var sessions = SSHSessionManager()
+
     var body: some Scene {
         Window("SSH-Wakey", id: "main") {
-            ContentView()
+            ContentView(store: store, sessions: sessions)
         }
         .defaultSize(width: Column.minimumWindowWidth + 120, height: 600)
         .commands {
             CommandGroup(replacing: .newItem) {}
+        }
+
+        Settings {
+            SecuritySettingsView(store: store)
         }
     }
 }

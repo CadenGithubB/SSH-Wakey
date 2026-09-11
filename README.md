@@ -180,6 +180,43 @@ hand while the app is closed; anything invalid is caught by the same validation
 the editor uses. A file written by an older build still loads, and a file from a
 newer format version is refused rather than misread.
 
+### Encrypting the file
+
+Off by default. Turn it on in Settings (⌘,), where you choose a recovery
+passphrase.
+
+Once on, the file holds nothing readable: no names, no usernames, no addresses.
+The list is sealed with AES-GCM under a random key, and that key is then wrapped
+twice, so there are two independent ways in.
+
+- **A key in your Keychain.** Used silently every time the app opens the file.
+  You never see it and never type anything.
+- **Your recovery passphrase.** Used only when that key has gone: a Keychain
+  reset, a new Mac, an item deleted by hand. Put it in your password manager. It
+  is not meant to be memorised.
+
+Losing one does not lose the data. This is the same shape as a disk encryption
+recovery key: the passphrase does not decrypt the file, it decrypts the key that
+does. That is why changing the passphrase is instant and does not rewrite the
+file.
+
+When the Keychain key is missing the window says so and offers to unlock. Enter
+the passphrase, and a fresh Keychain key is stored so the next launch is silent
+again. Nothing can be edited while it is locked.
+
+**Export a Readable Copy** writes an ordinary unencrypted file, in exactly the
+format an unencrypted install uses, so it can be read by eye or put straight
+back. It is the copy to keep somewhere safe before you need it, and to keep out
+of shared folders. Turning encryption off does the same thing in place and
+removes the Keychain key.
+
+Worth keeping in proportion. FileVault already encrypts this file whenever the
+Mac is off or locked, only your account can read it, and it holds no passwords
+or keys. Encrypting it closes three narrower gaps: a program running as you
+reading it directly, an unencrypted backup destination, and the file being copied
+somewhere by accident. SECURITY.md is explicit about what it does and does not
+buy.
+
 ### Validation
 
 A connection must have a name, a username and a host, and a port from 1 to
@@ -361,6 +398,9 @@ session to Terminal.
 SSH-Wakey/
   main.swift               Entry point; askpass mode is decided here, before any UI
   SSHWakeyApp.swift        Scene and app delegate
+  Security/
+    ConnectionVault.swift      The encrypted file: one data key, two key slots
+    KeychainKeyStore.swift     The everyday key, in the login keychain
   Models/
     SSHConnection.swift        Saved metadata, Codable
     ConnectionFileStore.swift  Atomic JSON load and save with tight permissions
@@ -380,13 +420,13 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             143 tests
+SSH-WakeyTests/             177 tests
 ```
 
 ## Tests
 
-143 unit tests covering persistence and its file permissions, timestamps, change
-history, the per-row privacy toggle, which columns may be hidden and
+177 unit tests covering persistence and its file permissions, timestamps, change
+history, the encrypted file and both ways into it, the per-row privacy toggle, which columns may be hidden and
 how the table layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the
 password buffer, the Terminal handoff script, and the password channel itself. The channel tests run the real client code against the real

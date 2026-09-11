@@ -188,6 +188,13 @@ final class AskpassChannel: @unchecked Sendable {
     }
 
     private func handle(client: Int32) {
+        // Writing to a peer that has already gone raises SIGPIPE, and the
+        // default disposition for that is to kill the process. The app must not
+        // die because an askpass helper gave up early, so the error is turned
+        // into an ordinary EPIPE on this socket.
+        var noSignal: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size))
+
         var timeout = timeval(tv_sec: 2, tv_usec: 0)
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))

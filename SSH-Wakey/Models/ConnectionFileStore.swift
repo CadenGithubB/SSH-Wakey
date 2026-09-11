@@ -12,17 +12,33 @@ struct ConnectionFileStore: Sendable {
     struct Document: Codable, Sendable {
         static let currentVersion = 1
         var version: Int
-        var connections: [SSHConnection]
+        /// Present when the file is not encrypted.
+        var connections: [SSHConnection]?
+        /// Present when it is.
+        var vault: ConnectionVault?
 
         init(connections: [SSHConnection], version: Int = Document.currentVersion) {
             self.version = version
             self.connections = connections
         }
+
+        init(vault: ConnectionVault, version: Int = Document.currentVersion) {
+            self.version = version
+            self.vault = vault
+        }
+    }
+
+    /// What the file turned out to hold.
+    enum Contents: Equatable {
+        case empty
+        case plain([SSHConnection])
+        case encrypted(ConnectionVault)
     }
 
     enum StoreError: LocalizedError, Equatable {
         case unsupportedVersion(Int)
         case unreadable(String)
+        case encrypted
 
         var errorDescription: String? {
             switch self {
@@ -30,6 +46,8 @@ struct ConnectionFileStore: Sendable {
                 return "The saved connections file uses format version \(version), which this version of SSH-Wakey cannot read."
             case .unreadable(let reason):
                 return "The saved connections file could not be read: \(reason)"
+            case .encrypted:
+                return "The saved connections file is encrypted and has not been unlocked."
             }
         }
     }
@@ -49,17 +67,17 @@ struct ConnectionFileStore: Sendable {
         self.directoryURL = directoryURL
     }
 
-    /// An empty list when the file does not exist yet, which is the normal
-    /// first-launch case.
-    func load() throws -> [SSHConnection] {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+    /// Reads whichever form the file is in. Empty when it does not exist yet,
+    /// which is the normal first-launch case.
+    func read() throws -> Contents {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return .empty }
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
         } catch {
             throw StoreError.unreadable(error.localizedDescription)
         }
-        guard !data.isEmpty else { return [] }
+        guard !data.isEmpty else { return .empty }
 
         let document: Document
         do {
@@ -72,20 +90,38 @@ struct ConnectionFileStore: Sendable {
         guard document.version <= Document.currentVersion else {
             throw StoreError.unsupportedVersion(document.version)
         }
-        return document.connections
+        if let vault = document.vault { return .encrypted(vault) }
+        return .plain(document.connections ?? [])
+    }
+
+    /// The plain-text path. Throws if the file turns out to be encrypted.
+    func load() throws -> [SSHConnection] {
+        switch try read() {
+        case .empty: return []
+        case .plain(let connections): return connections
+        case .encrypted: throw StoreError.encrypted
+        }
     }
 
     /// Writes atomically, then tightens permissions on both the directory and
     /// the file. Permissions are reapplied on every save because an atomic
     /// write replaces the inode.
     func save(_ connections: [SSHConnection]) throws {
+        try write(Document(connections: connections))
+    }
+
+    func save(_ vault: ConnectionVault) throws {
+        try write(Document(vault: vault))
+    }
+
+    private func write(_ document: Document) throws {
         try createDirectoryIfNeeded()
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         // ISO-8601 so the dates in the file are readable if you open it.
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(Document(connections: connections))
+        let data = try encoder.encode(document)
 
         try data.write(to: fileURL, options: [.atomic])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)

@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "AB0000000000000000000064"
+               BlueprintIdentifier = "AB0000000000000000000073"
                BuildableName = "SSH-Wakey.app"
                BlueprintName = "SSH-Wakey"
                ReferencedContainer = "container:SSH-Wakey.xcodeproj">
@@ -32,7 +32,7 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "AB0000000000000000000065"
+               BlueprintIdentifier = "AB0000000000000000000074"
                BuildableName = "SSH-WakeyTests.xctest"
                BlueprintName = "SSH-WakeyTests"
                ReferencedContainer = "container:SSH-Wakey.xcodeproj">
@@ -54,7 +54,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "AB0000000000000000000064"
+            BlueprintIdentifier = "AB0000000000000000000073"
             BuildableName = "SSH-Wakey.app"
             BlueprintName = "SSH-Wakey"
             ReferencedContainer = "container:SSH-Wakey.xcodeproj">
@@ -71,7 +71,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "AB0000000000000000000064"
+            BlueprintIdentifier = "AB0000000000000000000073"
             BuildableName = "SSH-Wakey.app"
             BlueprintName = "SSH-Wakey"
             ReferencedContainer = "container:SSH-Wakey.xcodeproj">

@@ -82,6 +82,56 @@ method*, so a rejected password produces a second ask under the next method.
 SSH-Wakey does not answer it. The failure message says that it happened, and you
 decide whether to try again. Nothing is retried automatically.
 
+## Encrypting the file, and what that is worth
+
+Off by default, switched on in Settings. What it protects against is narrower
+than it sounds, and saying so plainly is more useful than overselling it.
+
+**Already true without it.** The file is `0600` in a `0700` folder, so no other
+account can read it. FileVault encrypts it whenever the Mac is off or locked. It
+contains no passwords, no keys and no passphrases: names, usernames, addresses,
+ports, dates and an edit history.
+
+**What encrypting it adds.** Three narrower gaps close: a program running as you
+reading the file directly, a backup destination that is not itself encrypted,
+and the file being copied somewhere by accident. That is a real improvement, and
+it is not the same as making the data secret from a compromised machine.
+
+**What it costs.** The file stops being readable and hand-editable, and there is
+now a key that can be lost. Both are answered below.
+
+### The design
+
+A random 256-bit data key seals the connection list with AES-GCM. The data key is
+then wrapped twice, producing two independent ways in:
+
+- **The Keychain slot.** A random key in the login keychain, read silently every
+  time the app opens the file.
+- **The passphrase slot.** A key derived from your recovery passphrase with
+  PBKDF2-HMAC-SHA256 at 600,000 rounds, over a random 16-byte salt.
+
+Either slot yields the data key, so losing one does not lose the data. Because
+the passphrase decrypts a key rather than the file, changing it rewraps a few
+dozen bytes instead of re-encrypting everything, and the old passphrase stops
+working immediately.
+
+Recovering with the passphrase also stores a fresh Keychain key, so a recovery is
+a one-time event rather than a permanent downgrade to typing a passphrase.
+
+### The limits of it
+
+- **A passphrase you cannot produce is a file you cannot open.** There is no
+  back door and no reset. Export before you need it, and keep the passphrase in a
+  password manager.
+- **It is only unlocked while the app has the key.** Anything running as you
+  while the app is open can read the connection list out of the app, and on
+  macOS 15 and earlier, so can anything that can read the Keychain item.
+- **The Keychain item is tied to the app's signature.** An ad-hoc signed build
+  changes signature every time it is rebuilt, so macOS may ask you to allow
+  access again after a rebuild. That prompt is expected.
+- **An export is plain text.** It is written `0600`, and after that it is an
+  ordinary file with ordinary risks.
+
 ## Hardening the app itself
 
 Protecting the password in memory is pointless if anything on the machine can
@@ -112,6 +162,11 @@ codesign -dv --entitlements - /path/to/SSH-Wakey.app
 - **The pages holding it are pinned** with `mlock`, so the plaintext is never
   written out to swap. macOS encrypts swap, but not putting it there is better
   than relying on that.
+- **A peer that vanishes cannot kill the app.** Writing into a socket or pipe
+  nobody is reading raises SIGPIPE, whose default disposition is to terminate the
+  process. Both sides of the password channel set `SO_NOSIGPIPE`, and the askpass
+  helper ignores the signal, so an ssh process that gives up early produces a
+  clean "no password available" rather than a killed process.
 - **The password sheet is excluded from screen capture** (`sharingType = .none`),
   so it does not appear in screenshots, screen recordings or a shared screen.
 - **Secure event input is held** for as long as the sheet is open, which stops

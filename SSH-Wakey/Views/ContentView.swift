@@ -4,8 +4,9 @@ import SwiftUI
 /// The main window: the saved list, what it is doing, and the buttons.
 struct ContentView: View {
 
-    @State private var store = ConnectionStore()
-    @State private var sessions = SSHSessionManager()
+    let store: ConnectionStore
+    let sessions: SSHSessionManager
+
     @State private var selection: SSHConnection.ID?
     @State private var sheet: SheetKind?
     @State private var removalTarget: SSHConnection?
@@ -27,6 +28,7 @@ struct ContentView: View {
         case edit(SSHConnection)
         case password(SSHConnection)
         case hostKey(SSHConnection)
+        case unlock
         case help
 
         var id: String {
@@ -35,6 +37,7 @@ struct ContentView: View {
             case .edit(let connection): return "edit-\(connection.id)"
             case .password(let connection): return "password-\(connection.id)"
             case .hostKey(let connection): return "hostkey-\(connection.id)"
+            case .unlock: return "unlock"
             case .help: return "help"
             }
         }
@@ -92,7 +95,18 @@ struct ContentView: View {
 
     @ViewBuilder
     private var listArea: some View {
-        if store.connections.isEmpty {
+        if store.isLocked {
+            ContentUnavailableView {
+                Label("Your connections are encrypted", systemImage: "lock.fill")
+            } description: {
+                Text("The key in your Keychain is missing or no longer fits, so they could not be "
+                     + "opened automatically. Your recovery passphrase will open them.")
+            } actions: {
+                Button("Unlock…") { sheet = .unlock }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .controlBackgroundColor))
+        } else if store.connections.isEmpty {
             // Shown instead of the table, not over it, so the striped rows do
             // not run through the text.
             ContentUnavailableView {
@@ -322,13 +336,15 @@ struct ContentView: View {
     private var controls: some View {
         HStack(spacing: 10) {
             Button("Add") { sheet = .add }
+                .disabled(store.isLocked)
             Button("Edit") {
                 if let connection = selectedConnection { sheet = .edit(connection) }
             }
-            .disabled(selectedConnection == nil)
+            .disabled(selectedConnection == nil || store.isLocked)
 
             Button("Remove") { removalTarget = selectedConnection }
-                .disabled(selectedConnection == nil || selectedState.isConnected || selectedState.isConnecting)
+                .disabled(selectedConnection == nil || store.isLocked
+                          || selectedState.isConnected || selectedState.isConnecting)
 
             Button {
                 sheet = .help
@@ -379,7 +395,7 @@ struct ContentView: View {
                 if let connection = selectedConnection { activate(connection) }
             }
             .keyboardShortcut(.defaultAction)
-            .disabled(selectedConnection == nil)
+            .disabled(selectedConnection == nil || store.isLocked)
         }
     }
 
@@ -429,6 +445,15 @@ struct ContentView: View {
                         try? await Task.sleep(nanoseconds: 350_000_000)
                         sheet = .password(connection)
                     }
+                },
+                onCancel: { sheet = nil })
+
+        case .unlock:
+            PassphraseSheet(
+                purpose: .unlock,
+                onSubmit: { passphrase in
+                    try store.unlock(withPassphrase: passphrase)
+                    sheet = nil
                 },
                 onCancel: { sheet = nil })
 

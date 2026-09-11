@@ -34,7 +34,14 @@ enum AskpassHelper {
     /// Exiting non-zero tells `ssh` that no password is available, which ends
     /// the attempt instead of falling back to some other prompt.
     static func serve(_ request: Request) -> Never {
+        // ssh can give up before reading the answer, and the default response to
+        // writing into a pipe nobody is reading is for the process to be killed.
+        // Exiting cleanly instead means the app sees "no password available"
+        // rather than a mysterious signal.
+        signal(SIGPIPE, SIG_IGN)
+
         guard let answer = fetch(request), !answer.isEmpty else { exit(1) }
+        var failed = false
         answer.withUnsafeBufferPointer { buffer in
             var offset = 0
             while offset < buffer.count {
@@ -44,10 +51,11 @@ enum AskpassHelper {
                     continue
                 }
                 if written < 0 && errno == EINTR { continue }
+                failed = true
                 break
             }
         }
-        exit(0)
+        exit(failed ? 1 : 0)
     }
 
     /// Internal rather than private so the unit tests can drive the client half
@@ -56,6 +64,10 @@ enum AskpassHelper {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return nil }
         defer { close(descriptor) }
+
+        var noSignal: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
+                   socklen_t(MemoryLayout<Int32>.size))
 
         var timeout = timeval(tv_sec: 10, tv_usec: 0)
         setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))

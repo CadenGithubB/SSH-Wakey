@@ -218,17 +218,22 @@ final class PasswordChannelTests: XCTestCase {
         helper.environment = environment
 
         let output = Pipe()
+        let errors = Pipe()
         helper.standardOutput = output
-        helper.standardError = FileHandle.nullDevice
+        helper.standardError = errors
         try helper.run()
 
         let answer = output.fileHandleForReading.readDataToEndOfFile()
+        let complaints = errors.fileHandleForReading.readDataToEndOfFile()
         helper.waitUntilExit()
 
-        XCTAssertEqual(String(decoding: answer, as: UTF8.self), secret + "\n")
-        XCTAssertEqual(helper.terminationStatus, 0)
-        XCTAssertTrue(channel.outcome.served)
-        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
+        let diagnosis = """
+        status \(helper.terminationStatus), reason \(helper.terminationReason.rawValue),         outcome \(channel.outcome), stderr: \(String(decoding: complaints, as: UTF8.self))
+        """
+        XCTAssertEqual(String(decoding: answer, as: UTF8.self), secret + "\n", diagnosis)
+        XCTAssertEqual(helper.terminationStatus, 0, diagnosis)
+        XCTAssertTrue(channel.outcome.served, diagnosis)
+        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0, diagnosis)
     }
 
     // MARK: - Prompt matching
