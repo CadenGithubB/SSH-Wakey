@@ -107,6 +107,8 @@ struct PassphraseSheet: View {
 
     @State private var current = ""
     @State private var passphrase = ""
+    @State private var isRevealed = false
+    @State private var copied = false
     @State private var confirmation = ""
     @State private var problem: String?
     private enum Field: Hashable { case current, new }
@@ -150,11 +152,33 @@ struct PassphraseSheet: View {
                         .onSubmit(submit)
                 }
 
-                SecureField(purpose.wantsConfirmation ? "New passphrase" : "Recovery passphrase",
+                HStack(spacing: 6) {
+                    if isRevealed {
+                        TextField("New passphrase", text: $passphrase)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(size: 12, design: .monospaced))
+                            .focused($focused, equals: .new)
+                            .onSubmit(submit)
+                    } else {
+                        SecureField(
+                            purpose.wantsConfirmation ? "New passphrase" : "Recovery passphrase",
                             text: $passphrase)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($focused, equals: .new)
-                    .onSubmit(submit)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($focused, equals: .new)
+                            .onSubmit(submit)
+                    }
+
+                    if purpose.wantsConfirmation {
+                        Button {
+                            isRevealed.toggle()
+                        } label: {
+                            Image(systemName: isRevealed ? "eye.slash" : "eye")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(isRevealed ? "Hide it" : "Show it, so you can check what you copied")
+                    }
+                }
 
                 if purpose.wantsConfirmation {
                     SecureField("Repeat it", text: $confirmation)
@@ -164,6 +188,29 @@ struct PassphraseSheet: View {
                     Text("At least \(VaultCrypto.minimumPassphraseLength) characters.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    Divider()
+
+                    HStack(spacing: 8) {
+                        Button("Generate", action: generate)
+                        Button(copied ? "Copied" : "Copy", action: copy)
+                            .disabled(passphrase.isEmpty)
+                        Button("Open Passwords") {
+                            NSWorkspace.shared.open(
+                                URL(fileURLWithPath: "/System/Applications/Passwords.app"))
+                        }
+                        Spacer()
+                    }
+                    .controlSize(.small)
+
+                    Text("""
+                    macOS does not let an app write into the Passwords app, so copy it and add it \
+                    there yourself as a new entry. The clipboard is cleared again after a minute \
+                    and a half.
+                    """)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if let problem {
@@ -193,8 +240,35 @@ struct PassphraseSheet: View {
             }
             .padding(16)
         }
-        .frame(width: 440)
+        .frame(width: 460)
+        .background(UncapturableWindow())
         .onAppear { focused = purpose.wantsCurrent ? .current : .new }
+    }
+
+    private func generate() {
+        passphrase = VaultCrypto.suggestedPassphrase()
+        confirmation = passphrase
+        isRevealed = true
+        copied = false
+        problem = nil
+    }
+
+    /// Marked as concealed so clipboard managers leave it alone, and cleared
+    /// again shortly afterwards unless something else has taken the clipboard
+    /// over in the meantime.
+    private func copy() {
+        let pasteboard = NSPasteboard.general
+        let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+        pasteboard.declareTypes([.string, concealed], owner: nil)
+        pasteboard.setString(passphrase, forType: .string)
+        pasteboard.setString("", forType: concealed)
+
+        copied = true
+        let stamp = pasteboard.changeCount
+        DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
+            guard NSPasteboard.general.changeCount == stamp else { return }
+            NSPasteboard.general.clearContents()
+        }
     }
 
     private func submit() {

@@ -73,6 +73,23 @@ enum VaultCrypto {
     /// It is written down in a password manager, not memorised.
     static let minimumPassphraseLength = 12
 
+    /// A passphrase worth storing in a password manager: 100 bits of entropy,
+    /// in an alphabet with no characters that can be confused for each other.
+    ///
+    /// Random characters rather than words, because this is meant to be pasted
+    /// and never typed from memory, and because a short word list would be
+    /// weaker than it looks.
+    static func suggestedPassphrase() -> String {
+        // 32 symbols, so a byte maps onto them with no bias. I, O, 0 and 1 are
+        // left out so the result can be read back without ambiguity.
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        let bytes = randomBytes(20)
+        let characters = bytes.map { alphabet[Int($0) % alphabet.count] }
+        return stride(from: 0, to: characters.count, by: 4)
+            .map { String(characters[$0..<min($0 + 4, characters.count)]) }
+            .joined(separator: "-")
+    }
+
     // MARK: - Sealing
 
     static func makeDataKey() -> SymmetricKey { SymmetricKey(size: .bits256) }

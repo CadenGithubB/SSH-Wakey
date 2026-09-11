@@ -88,7 +88,7 @@ struct PasswordPromptView: View {
 
 /// Marks the sheet's window as not capturable, so the password field does not
 /// appear in screenshots, screen recordings or a shared screen.
-private struct UncapturableWindow: NSViewRepresentable {
+struct UncapturableWindow: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async { view.window?.sharingType = .none }

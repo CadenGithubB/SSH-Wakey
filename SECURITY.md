@@ -157,6 +157,14 @@ a one-time event rather than a permanent downgrade to typing a passphrase.
   same proof. It is worth being honest that this is a weaker gate than the other
   two: the same information is already on screen, so it raises the effort rather
   than closing a hole.
+- **The passphrase cannot be written into the Passwords app for you.** That app
+  is built on the data protection keychain, and adding anything to it, or
+  marking any keychain item as synchronisable, returns `errSecMissingEntitlement`
+  for a build signed ad-hoc. Writing it to the ordinary login keychain would
+  work, and would be the wrong thing to do anyway: that is the same keychain
+  holding the key the passphrase exists to back up, so it would put the spare
+  key inside the locked room. The sheet generates one, shows it, copies it and
+  opens the Passwords app instead, and you paste it in yourself.
 - **There is a corner this creates.** If the passphrase is forgotten while the
   Keychain key still works, the file opens normally but cannot be exported,
   turned off, or re-keyed, because all three need the passphrase. The way out is

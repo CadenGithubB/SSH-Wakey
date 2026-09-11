@@ -179,6 +179,36 @@ final class ConnectionVaultTests: XCTestCase {
         XCTAssertLessThan(elapsed, 5, "a person is waiting for this")
     }
 
+    // MARK: - The suggested passphrase
+
+    func testAGeneratedPassphraseIsLongEnoughToAccept() {
+        let suggestion = VaultCrypto.suggestedPassphrase()
+        XCTAssertGreaterThanOrEqual(suggestion.count, VaultCrypto.minimumPassphraseLength)
+        XCTAssertNoThrow(try makeVault(passphrase: suggestion))
+    }
+
+    func testAGeneratedPassphraseHasNoAmbiguousCharacters() {
+        let allowed = Set("ABCDEFGHJKLMNPQRSTUVWXYZ23456789-")
+        for _ in 0..<50 {
+            let suggestion = VaultCrypto.suggestedPassphrase()
+            XCTAssertTrue(suggestion.allSatisfy(allowed.contains), suggestion)
+            // I, O, 0 and 1 are the ones people mistype when reading it back.
+            XCTAssertFalse(suggestion.contains(where: "IO01".contains), suggestion)
+        }
+    }
+
+    func testAGeneratedPassphraseIsGroupedForReading() {
+        let suggestion = VaultCrypto.suggestedPassphrase()
+        let groups = suggestion.split(separator: "-")
+        XCTAssertEqual(groups.count, 5)
+        XCTAssertTrue(groups.allSatisfy { $0.count == 4 }, suggestion)
+    }
+
+    func testEveryGeneratedPassphraseIsDifferent() {
+        let suggestions = Set((0..<200).map { _ in VaultCrypto.suggestedPassphrase() })
+        XCTAssertEqual(suggestions.count, 200)
+    }
+
     func testEveryVaultErrorExplainsItself() {
         let errors: [VaultError] = [
             .unsupportedFormat(2), .wrongPassphrase, .keychainKeyDoesNotFit,

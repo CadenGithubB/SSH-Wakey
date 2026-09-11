@@ -215,6 +215,11 @@ removes the Keychain key. Exporting, turning encryption off and changing the
 passphrase all ask for the current passphrase first, so every route to a lasting
 plain-text copy needs the same proof.
 
+The passphrase sheet will generate a strong one, show it, and copy it with the
+clipboard marked so clipboard managers ignore it and cleared again after ninety
+seconds. It also opens the Passwords app, though you have to paste it in
+yourself: macOS refuses to let an unsigned app write there.
+
 Export once as soon as you turn encryption on. If the passphrase is ever
 forgotten while the Keychain key still works, the file opens but cannot be
 exported, turned off or re-keyed, and the only way out is to read the
@@ -432,12 +437,12 @@ SSH-Wakey/
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
   Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             205 tests
+SSH-WakeyTests/             209 tests
 ```
 
 ## Tests
 
-205 unit tests covering persistence and its file permissions, timestamps, change
+209 unit tests covering persistence and its file permissions, timestamps, change
 history, the encrypted file and both ways into it, appending to known_hosts, the per-row privacy toggle, which columns may be hidden and
 how the table layout is saved, field and argument validation, command construction, failure
 classification against real OpenSSH diagnostics, local address detection, the
