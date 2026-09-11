@@ -63,7 +63,6 @@ struct PasswordPromptView: View {
             .padding(16)
         }
         .frame(width: 420)
-        .background(UncapturableWindow())
         .onAppear {
             focused = true
             secureInput.acquire()
@@ -85,18 +84,6 @@ struct PasswordPromptView: View {
     }
 }
 
-
-/// Marks the sheet's window as not capturable, so the password field does not
-/// appear in screenshots, screen recordings or a shared screen.
-struct UncapturableWindow: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async { view.window?.sharingType = .none }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
 
 /// Holds secure event input for as long as the password sheet is on screen.
 ///

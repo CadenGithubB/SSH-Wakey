@@ -219,8 +219,12 @@ codesign -dv --entitlements - /path/to/SSH-Wakey.app
   process. Both sides of the password channel set `SO_NOSIGPIPE`, and the askpass
   helper ignores the signal, so an ssh process that gives up early produces a
   clean "no password available" rather than a killed process.
-- **The password sheet is excluded from screen capture** (`sharingType = .none`),
-  so it does not appear in screenshots, screen recordings or a shared screen.
+- **The password sheet is no longer excluded from screen capture.** It was, via
+  `sharingType = .none`, and that had to be removed: the sheet stopped drawing
+  on screen entirely a moment after it appeared, leaving the window in its modal
+  state with nothing on it. The protection was worth little anyway, because the
+  field is masked and there is nothing in the sheet a recording could reveal
+  beyond the destination.
 - **Secure event input is held** for as long as the sheet is open, which stops
   other processes reading the keystrokes through an event tap. It is given up
   the moment the sheet closes or the app stops being frontmost, because it is a

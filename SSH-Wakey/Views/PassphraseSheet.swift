@@ -241,7 +241,6 @@ struct PassphraseSheet: View {
             .padding(16)
         }
         .frame(width: 460)
-        .background(UncapturableWindow())
         .onAppear { focused = purpose.wantsCurrent ? .current : .new }
     }
 
