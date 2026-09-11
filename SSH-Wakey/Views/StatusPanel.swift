@@ -40,7 +40,7 @@ struct StatusPanel: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
-                    HStack(spacing: 12) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
                         if state.isConnecting {
                             Button("Cancel", action: onCancel)
                                 .controlSize(.small)
@@ -53,8 +53,10 @@ struct StatusPanel: View {
                                 .controlSize(.small)
                             }
                             if failure.offersHostKeyReview {
+                                // Full size, unlike the buttons beside it. When
+                                // a host is unknown this is not a footnote, it
+                                // is the thing that has to happen next.
                                 Button("Review host key…", action: onReviewHostKey)
-                                    .controlSize(.small)
                             }
                             if failure.offersBootHelp {
                                 Button("What SSH-Wakey does", action: onShowHelp)
