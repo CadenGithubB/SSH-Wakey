@@ -53,8 +53,9 @@ final class SSHSessionManager {
         }
     }
 
-    /// ssh's own TCP connect timeout, in seconds.
-    static let connectTimeout = 10
+    /// ssh's own TCP connect timeout, in seconds. Long enough that a machine
+    /// which has just taken a wake packet can finish bringing sshd up.
+    static let connectTimeout = 15
     /// How long the whole attempt, including authentication, may take.
     static let overallTimeout: TimeInterval = 45
     /// A session shorter than this is probably a Mac finishing its FileVault
@@ -67,6 +68,10 @@ final class SSHSessionManager {
     /// Recent attempts, kept so they can be written out when something needs
     /// explaining. Bounded, and gone when the app quits.
     private(set) var diagnostics: [DiagnosticEntry] = []
+    /// Called after a successful login with a MAC taken from the ARP table.
+    var onLearnedLinkAddress: ((UUID, String) -> Void)?
+    /// Shown in the status panel while a wake packet is on the network.
+    static let wakingHeadline = "Waking the machine..."
 
     private var sessions: [UUID: Session] = [:]
     private var attempts: [UUID: Task<Void, Never>] = [:]
@@ -95,7 +100,11 @@ final class SSHSessionManager {
             password.wipe()
             return
         }
-        states[id] = .connecting(stage: "Starting ssh…")
+        states[id] = .connecting(
+            stage: NetworkWake.shouldPoke(
+                host: connection.host, hardwareAddress: connection.hardwareAddress)
+            ? Self.wakingHeadline
+            : "Starting ssh…")
         attempts[id] = Task { [weak self] in
             await self?.runAttempt(connection, password: password, mode: mode)
         }
@@ -139,6 +148,22 @@ final class SSHSessionManager {
             return
         }
 
+        if NetworkWake.shouldPoke(host: connection.host, hardwareAddress: connection.hardwareAddress) {
+            states[id] = .connecting(stage: Self.wakingHeadline)
+            await NetworkWake.poke(host: connection.host, hardwareAddress: connection.hardwareAddress)
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: directory)
+                states[id] = .failed(Self.cancelledFailure)
+                return
+            }
+            try? await Task.sleep(nanoseconds: NetworkWake.settleNanoseconds)
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: directory)
+                states[id] = .failed(Self.cancelledFailure)
+                return
+            }
+        }
+
         let channel: AskpassChannel
         let arguments: [String]
         do {
@@ -164,71 +189,104 @@ final class SSHSessionManager {
         var environment = ProcessRunner.minimalEnvironment()
         environment.merge(channel.environmentAdditions()) { _, new in new }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: SSHCommandBuilder.sshExecutable)
-        process.arguments = arguments
-        process.environment = environment
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-
-        let errorPipe = Pipe()
-        process.standardError = errorPipe
-        let diagnostics = OutputCollector()
-        errorPipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                handle.readabilityHandler = nil
-            } else {
-                diagnostics.append(data)
-            }
-        }
-
-        do {
-            try process.run()
-        } catch {
-            errorPipe.fileHandleForReading.readabilityHandler = nil
-            try? FileManager.default.removeItem(at: directory)
-            states[id] = .failed(SSHFailure(
-                kind: .launchFailed,
-                headline: "/usr/bin/ssh could not be launched.",
-                guidance: error.localizedDescription, detail: nil))
-            return
-        }
-
-        states[id] = .connecting(stage: "Authenticating…")
-        let deadline = Date().addingTimeInterval(Self.overallTimeout)
+        var launchesRemaining = NetworkWake.shouldPoke(
+            host: connection.host, hardwareAddress: connection.hardwareAddress) ? 2 : 1
+        var process = Process()
+        var errorPipe = Pipe()
+        var diagnostics = OutputCollector()
         var outcome: AttemptOutcome = .stillWaiting
 
-        while outcome == .stillWaiting {
-            if Task.isCancelled {
-                outcome = .cancelled
-                break
+        launch: while true {
+            states[id] = .connecting(stage: "Starting ssh…")
+            process = Process()
+            process.executableURL = URL(fileURLWithPath: SSHCommandBuilder.sshExecutable)
+            process.arguments = arguments
+            process.environment = environment
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+
+            errorPipe = Pipe()
+            process.standardError = errorPipe
+            diagnostics = OutputCollector()
+            errorPipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                } else {
+                    diagnostics.append(data)
+                }
             }
-            // In unlock mode there is no control socket, so ssh saying it
-            // authenticated is the signal.
-            if mode == .unlock,
-               SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text) {
-                outcome = .authenticated
-                break
+
+            do {
+                try process.run()
+            } catch {
+                errorPipe.fileHandleForReading.readabilityHandler = nil
+                try? FileManager.default.removeItem(at: directory)
+                states[id] = .failed(SSHFailure(
+                    kind: .launchFailed,
+                    headline: "/usr/bin/ssh could not be launched.",
+                    guidance: error.localizedDescription, detail: nil))
+                return
             }
-            // ssh creates the control socket only once the connection is
-            // authenticated, so its appearance is the success signal.
-            if mode == .session, FileManager.default.fileExists(atPath: controlPath) {
-                outcome = .authenticated
-                break
+
+            states[id] = .connecting(stage: "Authenticating…")
+            let deadline = Date().addingTimeInterval(Self.overallTimeout)
+            outcome = .stillWaiting
+
+            while outcome == .stillWaiting {
+                if Task.isCancelled {
+                    outcome = .cancelled
+                    break
+                }
+                if mode == .unlock,
+                   SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text) {
+                    outcome = .authenticated
+                    break
+                }
+                if mode == .session, FileManager.default.fileExists(atPath: controlPath) {
+                    outcome = .authenticated
+                    break
+                }
+                if !process.isRunning {
+                    outcome = SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text)
+                        ? .authenticated : .exited
+                    break
+                }
+                if Date() >= deadline {
+                    outcome = .timedOut
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 150_000_000)
             }
-            if !process.isRunning {
-                // A machine unlocking its disk hangs up the moment it accepts
-                // the password, so a login that worked can still exit.
-                outcome = SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text)
-                    ? .authenticated : .exited
-                break
+
+            let canRetry = launchesRemaining > 1
+                && !channel.outcome.served
+                && Self.shouldRetryAfterWake(outcome, output: diagnostics.text)
+            launchesRemaining -= 1
+            if canRetry {
+                terminate(process)
+                errorPipe.fileHandleForReading.readabilityHandler = nil
+                states[id] = .connecting(stage: Self.wakingHeadline)
+                await NetworkWake.poke(
+                    host: connection.host, hardwareAddress: connection.hardwareAddress)
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: directory)
+                    record(connection, mode: mode, result: "Cancelled",
+                           channel: channel.outcome, output: diagnostics.text)
+                    states[id] = .failed(Self.cancelledFailure)
+                    return
+                }
+                try? await Task.sleep(nanoseconds: NetworkWake.settleNanoseconds)
+                if Task.isCancelled {
+                    try? FileManager.default.removeItem(at: directory)
+                    record(connection, mode: mode, result: "Cancelled",
+                           channel: channel.outcome, output: diagnostics.text)
+                    states[id] = .failed(Self.cancelledFailure)
+                    return
+                }
+                continue launch
             }
-            if Date() >= deadline {
-                outcome = .timedOut
-                break
-            }
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            break launch
         }
 
         switch outcome {
@@ -289,6 +347,7 @@ final class SSHSessionManager {
             try? FileManager.default.removeItem(at: directory)
             record(connection, mode: mode, result: "Logged in, then closed as asked",
                    channel: channel.outcome, output: diagnostics.text)
+            rememberLinkAddress(of: connection)
             states[id] = .unlocked(
                 Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: false))
             return
@@ -302,6 +361,7 @@ final class SSHSessionManager {
             try? FileManager.default.removeItem(at: directory)
             record(connection, mode: mode, result: "Logged in, then the machine closed it",
                    channel: channel.outcome, output: diagnostics.text)
+            rememberLinkAddress(of: connection)
             states[id] = .unlocked(
                 Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: true))
             return
@@ -332,6 +392,7 @@ final class SSHSessionManager {
 
         record(connection, mode: mode, result: "Connected",
                channel: channel.outcome, output: diagnostics.text)
+        rememberLinkAddress(of: connection)
         errorPipe.fileHandleForReading.readabilityHandler = nil
         sessions[id] = Session(
             process: process, controlPath: controlPath, directoryURL: directory, connection: connection)
@@ -343,7 +404,12 @@ final class SSHSessionManager {
         if !process.isRunning { masterExited(id) }
     }
 
-    /// Records what happened, for the diagnostics file.
+    /// Attempts recorded for one saved connection, newest first.
+    func diagnostics(for connectionID: UUID) -> [DiagnosticEntry] {
+        DiagnosticsReport.entries(diagnostics, for: connectionID)
+    }
+
+    /// Records what happened, for Activity and the diagnostics file.
     private func record(
         _ connection: SSHConnection,
         mode: ConnectMode,
@@ -353,12 +419,21 @@ final class SSHSessionManager {
     ) {
         diagnostics.append(DiagnosticEntry(
             at: Date(),
+            connectionID: connection.id,
             connection: connection.name,
             destination: connection.displayDestination,
             mode: mode.title,
             result: result,
             channel: channel.summary,
             output: output))
+
+        // Drop the oldest attempts for this machine first, then the oldest
+        // overall, so one busy host cannot erase every other machine's history.
+        let perConnection = DiagnosticsReport.maximumEntriesPerConnection
+        while diagnostics.filter({ $0.connectionID == connection.id }).count > perConnection,
+              let oldest = diagnostics.firstIndex(where: { $0.connectionID == connection.id }) {
+            diagnostics.remove(at: oldest)
+        }
         if diagnostics.count > DiagnosticsReport.maximumEntries {
             diagnostics.removeFirst(diagnostics.count - DiagnosticsReport.maximumEntries)
         }
@@ -434,6 +509,34 @@ final class SSHSessionManager {
     }
 
     // MARK: - Helpers
+
+    static let cancelledFailure = SSHFailure(
+        kind: .cancelled,
+        headline: "Connection cancelled.",
+        guidance: "Nothing was left running and the password was discarded.", detail: nil)
+
+    /// TCP never completed, so a wake poke and a second ssh are worth trying.
+    /// Connection refused is not: the machine already answered.
+    private static func shouldRetryAfterWake(_ outcome: AttemptOutcome, output: String) -> Bool {
+        switch outcome {
+        case .timedOut:
+            return true
+        case .exited:
+            let kind = SSHOutputClassifier.classify(exitCode: 255, standardError: output).kind
+            return kind == .timeout || kind == .hostUnreachable
+        default:
+            return false
+        }
+    }
+
+    private func rememberLinkAddress(of connection: SSHConnection) {
+        let id = connection.id
+        let host = connection.host
+        Task {
+            guard let mac = await NetworkWake.learnedAddress(for: host) else { return }
+            await MainActor.run { self.onLearnedLinkAddress?(id, mac) }
+        }
+    }
 
     /// Adds what the password channel saw to a failure message.
     ///

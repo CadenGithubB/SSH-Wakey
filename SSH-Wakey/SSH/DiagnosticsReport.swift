@@ -9,6 +9,8 @@ import Foundation
 struct DiagnosticEntry: Identifiable, Sendable {
     let id = UUID()
     var at: Date
+    /// Ties the attempt to a saved connection so Activity can show one machine.
+    var connectionID: UUID
     var connection: String
     var destination: String
     var mode: String
@@ -20,8 +22,22 @@ struct DiagnosticEntry: Identifiable, Sendable {
 /// Renders recent attempts as something that can be read, saved and sent on.
 enum DiagnosticsReport {
 
-    /// Enough to see a pattern, few enough that the file stays readable.
-    static let maximumEntries = 10
+    /// Enough for several hosts to each have a short history in one session,
+    /// few enough that the diagnostics file stays readable.
+    static let maximumEntries = 40
+    /// Cap for one machine's Activity sheet, so a busy host cannot crowd out
+    /// every other entry in the shared list.
+    static let maximumEntriesPerConnection = 20
+
+    /// Newest first. Used by the per-host Activity sheet.
+    static func entries(
+        _ entries: [DiagnosticEntry],
+        for connectionID: UUID
+    ) -> [DiagnosticEntry] {
+        entries
+            .filter { $0.connectionID == connectionID }
+            .sorted { $0.at > $1.at }
+    }
 
     static func text(
         entries: [DiagnosticEntry],

@@ -106,7 +106,19 @@ struct ConnectionFileStore: Sendable {
     enum StoreError: LocalizedError, Equatable {
         case unsupportedVersion(Int)
         case unreadable(String)
+        /// The bytes are present but are not a valid connections document —
+        /// truncated, edited into nonsense, or replaced with something else.
+        case damagedOrAltered(String)
         case encrypted
+
+        /// True when the file on disk failed a structural or cryptographic
+        /// check, rather than merely being absent or still locked.
+        var suggestsIntegrityProblem: Bool {
+            switch self {
+            case .damagedOrAltered: return true
+            case .unsupportedVersion, .unreadable, .encrypted: return false
+            }
+        }
 
         var errorDescription: String? {
             switch self {
@@ -114,6 +126,10 @@ struct ConnectionFileStore: Sendable {
                 return "The saved connections file uses format version \(version), which this version of SSH-Wakey cannot read."
             case .unreadable(let reason):
                 return "The saved connections file could not be read: \(reason)"
+            case .damagedOrAltered(let reason):
+                return "The saved connections file looks damaged or altered — it is not valid "
+                    + "SSH-Wakey data (\(reason)). Do not trust this copy; restore from an export "
+                    + "if you have one."
             case .encrypted:
                 return "The saved connections file is encrypted and has not been unlocked."
             }
@@ -153,10 +169,14 @@ struct ConnectionFileStore: Sendable {
             decoder.dateDecodingStrategy = .iso8601
             document = try decoder.decode(Document.self, from: data)
         } catch {
-            throw StoreError.unreadable(error.localizedDescription)
+            throw StoreError.damagedOrAltered(error.localizedDescription)
         }
         guard document.version <= Document.currentVersion else {
             throw StoreError.unsupportedVersion(document.version)
+        }
+        // A document that claims neither form is not something we wrote.
+        if document.vault == nil, document.connections == nil {
+            throw StoreError.damagedOrAltered("it has neither a connection list nor a vault")
         }
         if let vault = document.vault { return .encrypted(vault) }
         return .plain(document.connections ?? [])

@@ -1,6 +1,8 @@
 .DS_Store
 build/
 DerivedData/
+Logs/
+SSH-Wakey/Resources/_iconset.iconset/
 *.xcuserstate
 xcuserdata/
 *.xcscmblueprint

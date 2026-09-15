@@ -38,6 +38,14 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
     /// When true, a host whose key is not already in `known_hosts` is refused
     /// instead of being trusted automatically.
     var strictHostKeyChecking: Bool
+    /// What the primary button does for this machine. Remembered per connection
+    /// so waking one Mac does not change what Connect does on the next.
+    var connectMode: ConnectMode
+    /// Ethernet address learned after a successful TCP connection, used to send
+    /// a Wake-on-LAN packet next time. Not a secret; it is the same value `arp`
+    /// already shows. Nil until a connect has succeeded, or when the host
+    /// changed and the old address would point at the wrong machine.
+    var hardwareAddress: String?
 
     /// Nil for a connection saved by a build that did not record dates yet.
     /// Left nil rather than invented, so the window can say it does not know.
@@ -53,6 +61,8 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
         port: Int = SSHConnection.defaultPort,
         extraArguments: String = "",
         strictHostKeyChecking: Bool = true,
+        connectMode: ConnectMode = .unlock,
+        hardwareAddress: String? = nil,
         createdAt: Date? = nil,
         modifiedAt: Date? = nil,
         revisions: [ConnectionRevision] = []
@@ -64,6 +74,8 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
         self.port = port
         self.extraArguments = extraArguments
         self.strictHostKeyChecking = strictHostKeyChecking
+        self.connectMode = connectMode
+        self.hardwareAddress = hardwareAddress
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
         self.revisions = revisions
@@ -110,6 +122,12 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
                 + "→ \(describe(strictHostKeyChecking))")
         }
 
+        if previous.connectMode != connectMode {
+            changes.append("Connect: \(previous.connectMode.historyName) → \(connectMode.historyName)")
+        }
+
+        compare("Hardware address", previous.hardwareAddress ?? "", hardwareAddress ?? "")
+
         return changes
     }
 }
@@ -118,7 +136,7 @@ extension SSHConnection {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, username, host, port, extraArguments, strictHostKeyChecking
-        case createdAt, modifiedAt, revisions
+        case connectMode, hardwareAddress, createdAt, modifiedAt, revisions
     }
 
     /// Decoding tolerates files written by an older build that did not have
@@ -132,6 +150,13 @@ extension SSHConnection {
         port = try container.decodeIfPresent(Int.self, forKey: .port) ?? SSHConnection.defaultPort
         extraArguments = try container.decodeIfPresent(String.self, forKey: .extraArguments) ?? ""
         strictHostKeyChecking = try container.decodeIfPresent(Bool.self, forKey: .strictHostKeyChecking) ?? true
+        if let raw = try container.decodeIfPresent(String.self, forKey: .connectMode),
+           let mode = ConnectMode(rawValue: raw) {
+            connectMode = mode
+        } else {
+            connectMode = .unlock
+        }
+        hardwareAddress = try container.decodeIfPresent(String.self, forKey: .hardwareAddress)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt)
         modifiedAt = try container.decodeIfPresent(Date.self, forKey: .modifiedAt)
         revisions = try container.decodeIfPresent([ConnectionRevision].self, forKey: .revisions) ?? []

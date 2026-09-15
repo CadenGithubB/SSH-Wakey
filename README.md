@@ -88,17 +88,25 @@ someone else, sign it with a Developer ID and notarise it first.
 ## Using it
 
 1. **Add** a connection: display name, username, host or IP, port, and any extra
-   `ssh` options. Nothing is flagged as wrong until you press Save.
-2. Choose what Connect should do, from the menu beside the button.
-3. Select a connection and press **Connect**, or double-click the row.
-4. Type the password in the sheet that appears.
+   `ssh` options. Nothing is flagged as wrong until you press Save. Wake versus
+   Open a session is chosen here too, and remembered on that connection.
+2. Select a connection. The menu beside the button is for **that** machine.
+3. Press **Wake** (the default) or **Connect**, or double-click the row.
+4. Type the password in the sheet that appears. The sheet shows the destination
+   and the mode, so you can still change the mode without cancelling.
 
-### The two things Connect can do
+### The two things the button can do
 
-**Unlock, then disconnect** is the default. It logs in to prove the password
-works and closes the connection immediately. That is all a Mac waiting at the
-FileVault screen needs: the login is what unlocks its disk, and nothing has to
-stay open afterwards. Nothing is left running and no Terminal window opens.
+**Wake** is the default. It logs in to prove the password works and closes the
+connection immediately. That is all a Mac waiting at the FileVault screen
+needs: the login is what unlocks its disk, and nothing has to stay open
+afterwards. Nothing is left running and no Terminal window opens.
+
+On a local address it first sends a short wake packet the machine can hear
+while asleep, waits, then starts SSH. The status line says **Waking the
+machine...** during that. If TCP still times out, it pokes once more and
+tries SSH again. This is not Apple Remote Desktop; it is the same idea: wake
+first, then log in.
 
 It works even though the machine hangs up the moment it accepts the password,
 because ssh is asked to announce that it authenticated and the app watches for
@@ -106,11 +114,14 @@ that rather than for a clean exit. A login that succeeded and a login that was
 refused produce the same exit code, so without it the two would be
 indistinguishable.
 
-**Open a session** logs in and holds the connection open. When it says
-Connected, **Open in Terminal** starts a shell on that already-authenticated
-connection without asking for the password again. If the machine hangs up
-straight after accepting the password, which is what unlocking a disk looks
-like, the app says so rather than reporting a failure.
+**Open a session** (the button then says **Connect**) logs in and holds the
+connection open. When it says Connected, **Open in Terminal** starts a shell on
+that already-authenticated connection without asking for the password again. If
+the machine hangs up straight after accepting the password, which is what
+unlocking a disk looks like, the app says so rather than reporting a failure.
+
+Each saved connection remembers which of those two you chose, so waking one Mac
+does not change what the button does on the next.
 
 Double-clicking a row that is already connected opens another Terminal window on
 the same session.
@@ -145,18 +156,31 @@ longer fit and the table scrolls sideways instead of shrinking. Widths are
 stripped before saving, and the window cannot be made narrower than every column
 at its ideal width, so the default layout never scrolls sideways.
 
-Edit and Remove appear only when a connection is selected, rather than sitting
-there greyed out, and both are refused while that machine has a session open. The gear beside them opens Settings, where encryption lives.
+Right-click a single row for **Activity…**: the recent connection attempts for
+that machine, while this app has been open. It is the same record **Save
+Diagnostics…** writes out, filtered to one host. Nothing about attempts is
+written to the connections file.
+
+Command-click or Shift-click several rows to select them. Multi-select is for
+**Remove** only. Wake, Connect and Edit need one machine; offering them for a
+set would mean guessing a password or a destination.
+
+Edit appears only when exactly one connection is selected, rather than sitting
+there greyed out. Remove works for one row or several. Both are refused while
+any selected machine has a session open. The gear beside them opens Settings,
+where encryption lives.
 
 The **Help** menu has **Save Diagnostics…**, which writes what happened on the
 last few connection attempts to a text file: what was tried, what ssh said in
 full, and what the password channel did. Useful when something fails for a reason
 the status panel cannot name. It lists hostnames, usernames and key fingerprints,
 and no passwords, and the file says so at the top before anything else.
+Right-clicking a row and choosing **Activity…** shows the same record for that
+one machine, without writing a file.
 
-The **?** button opens **What SSH-Wakey does**: what it saves, how connecting and
-the password work, what reaching a Mac at the FileVault screen needs, and what
-the different failures mean.
+The **?** button opens **What SSH-Wakey does**: what it saves, how Wake and
+Connect work, what reaching a Mac at the FileVault screen needs, and what the
+different failures mean.
 
 The **i** button beside the extra arguments field lists the `ssh` options worth
 knowing, with a line each on what they do, and says what SSH-Wakey refuses.
@@ -199,6 +223,7 @@ Pretty-printed JSON written through `Codable`:
       "modifiedAt" : "2026-09-12T18:03:41Z",
       "name" : "Studio Mac",
       "port" : 22,
+      "connectMode" : "unlock",
       "revisions" : [
         {
           "date" : "2026-09-12T18:03:41Z",
@@ -225,7 +250,9 @@ because an atomic write replaces the file.
 There is no password field, and there never will be. You can edit the file by
 hand while the app is closed; anything invalid is caught by the same validation
 the editor uses. A file written by an older build still loads, and a file from a
-newer format version is refused rather than misread.
+newer format version is refused rather than misread. A file that is garbage, or
+an encrypted file whose seal no longer matches, is refused as damaged or
+altered — the window says so, rather than quietly loading an empty list.
 
 ### Encrypting the file
 
@@ -484,15 +511,17 @@ SSH-Wakey/
     TerminalHandoff.swift   Attaches Terminal to an authenticated session
     NetworkScope.swift      Tells a local address from a routable one
     ProcessRunner.swift     Small async wrapper around Process
-  Views/                    SwiftUI window, editor, password prompt, host key sheet
-SSH-WakeyTests/             204 tests
+    DiagnosticsReport.swift Recent attempts, also written by Save Diagnostics
+  Views/                    SwiftUI window, editor, password prompt, activity, host key sheet
+SSH-WakeyTests/             236 tests
 ```
 
 ## Tests
 
-204 unit tests covering persistence and its file permissions, timestamps, change
+236 unit tests covering persistence and its file permissions, timestamps, change
 history, the encrypted file and both ways into it, appending to known_hosts, which columns may be hidden and how the table
-layout is saved, field and argument validation, command construction, failure
+layout is saved, field and argument validation, command construction, wake packets
+and MAC parsing, failure
 classification against real OpenSSH diagnostics, local address detection, the
 password buffer, the Terminal handoff script, and the password channel itself. The channel tests run the real client code against the real
 server code in process, including the cases where it must refuse: a bad token, a

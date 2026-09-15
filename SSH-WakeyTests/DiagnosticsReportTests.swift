@@ -10,6 +10,7 @@ final class DiagnosticsReportTests: XCTestCase {
     private func entry(output: String = "debug1: Authenticated to 10.0.0.4") -> DiagnosticEntry {
         DiagnosticEntry(
             at: Date(timeIntervalSince1970: 1_770_000_000),
+            connectionID: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
             connection: "Studio Mac",
             destination: "admin@10.0.0.4",
             mode: ConnectMode.unlock.title,
@@ -88,5 +89,31 @@ final class DiagnosticsReportTests: XCTestCase {
 
     func testAnAttemptThatNeverNeededThePasswordSaysSo() {
         XCTAssertEqual(AskpassChannel.Outcome().summary, "never asked")
+    }
+
+    func testEntriesForOneConnectionAreNewestFirstAndIgnoreTheOthers() {
+        let studio = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let build = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+
+        var older = entry()
+        older.connectionID = studio
+        older.connection = "Studio Mac"
+        older.at = Date(timeIntervalSince1970: 100)
+        older.result = "older studio"
+
+        var newer = entry()
+        newer.connectionID = studio
+        newer.connection = "Studio Mac"
+        newer.at = Date(timeIntervalSince1970: 200)
+        newer.result = "newer studio"
+
+        var other = entry()
+        other.connectionID = build
+        other.connection = "Build box"
+        other.at = Date(timeIntervalSince1970: 300)
+        other.result = "build"
+
+        let filtered = DiagnosticsReport.entries([older, newer, other], for: studio)
+        XCTAssertEqual(filtered.map(\.result), ["newer studio", "older studio"])
     }
 }

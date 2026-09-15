@@ -7,20 +7,16 @@ struct ContentView: View {
     let store: ConnectionStore
     let sessions: SSHSessionManager
 
-    @State private var selection: SSHConnection.ID?
+    @State private var selection: Set<SSHConnection.ID> = []
     @State private var sheet: SheetKind?
-    @State private var removalTarget: SSHConnection?
+    /// One or more connections awaiting a Remove confirmation.
+    @State private var removalTargets: [SSHConnection]?
     @State private var showsColumnPicker = false
 
     /// The one row whose details are on show. Everything else is masked, and
     /// revealing a row hides whichever was revealed before, so at most one
     /// machine's username and address is ever readable at a glance.
     @State private var revealedRow: SSHConnection.ID?
-
-    /// What Connect does. Unlocking is the default, because getting a machine
-    /// past its FileVault screen is the job this app exists for, and that needs
-    /// nothing left open afterwards.
-    @AppStorage("connectMode") private var connectMode: ConnectMode = .unlock
 
     /// Which optional columns are showing, and the order and widths of all of
     /// them. Name, Username, Host and the two dates cannot be hidden; Port and
@@ -33,6 +29,7 @@ struct ContentView: View {
         case edit(SSHConnection)
         case password(SSHConnection)
         case hostKey(SSHConnection)
+        case activity(SSHConnection)
         case unlock
         case help
 
@@ -42,14 +39,31 @@ struct ContentView: View {
             case .edit(let connection): return "edit-\(connection.id)"
             case .password(let connection): return "password-\(connection.id)"
             case .hostKey(let connection): return "hostkey-\(connection.id)"
+            case .activity(let connection): return "activity-\(connection.id)"
             case .unlock: return "unlock"
             case .help: return "help"
             }
         }
     }
 
-    private var selectedConnection: SSHConnection? { store.connection(with: selection) }
-    private var selectedState: SSHSessionManager.State { sessions.state(for: selection) }
+    /// Exactly one selected row, or nil when nothing or several are selected.
+    /// Connect, Edit and the status panel talk about one machine at a time.
+    private var selectedConnection: SSHConnection? {
+        guard selection.count == 1, let id = selection.first else { return nil }
+        return store.connection(with: id)
+    }
+    private var selectedConnections: [SSHConnection] {
+        store.connections.filter { selection.contains($0.id) }
+    }
+    private var selectedState: SSHSessionManager.State { sessions.state(for: selectedConnection?.id) }
+    /// True when any selected row has a live or in-flight session, so Remove
+    /// cannot quietly discard something that is still in use.
+    private var selectionIsBusy: Bool {
+        selectedConnections.contains {
+            let state = sessions.state(for: $0.id)
+            return state.isConnected || state.isConnecting
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,8 +74,11 @@ struct ContentView: View {
                 state: selectedState,
                 storageError: store.storageError,
                 actionError: sessions.lastActionError,
-                redactsAddresses: !isRevealed(selection),
-                onCancel: { if let id = selection { sessions.cancelConnect(id) } },
+                redactsAddresses: !isRevealed(selectedConnection?.id),
+                selectedCount: selection.count,
+                onCancel: {
+                    if let id = selectedConnection?.id { sessions.cancelConnect(id) }
+                },
                 onReviewHostKey: { if let connection = selectedConnection { sheet = .hostKey(connection) } },
                 onShowHelp: { sheet = .help })
             Divider()
@@ -70,6 +87,9 @@ struct ContentView: View {
         .frame(minWidth: Column.minimumWindowWidth, minHeight: 480)
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.sessions = sessions
+            sessions.onLearnedLinkAddress = { id, mac in
+                store.rememberLinkAddress(mac, for: id)
+            }
             restoreColumnLayout()
             Task { await SSHSessionManager.sweepAbandonedSessions() }
         }
@@ -79,25 +99,42 @@ struct ContentView: View {
         }
         .sheet(item: $sheet, content: sheetContent)
         .alert(
-            "Remove “\(removalTarget?.name ?? "")”?",
+            removalAlertTitle,
             isPresented: Binding(
-                get: { removalTarget != nil },
-                set: { if !$0 { removalTarget = nil } }),
-            presenting: removalTarget
-        ) { target in
+                get: { removalTargets != nil },
+                set: { if !$0 { removalTargets = nil } }),
+            presenting: removalTargets
+        ) { targets in
             Button("Remove", role: .destructive) {
-                if selection == target.id { selection = nil }
-                store.remove(id: target.id)
-                removalTarget = nil
+                let ids = Set(targets.map(\.id))
+                store.remove(ids: ids)
+                selection.subtract(ids)
+                removalTargets = nil
             }
-            Button("Cancel", role: .cancel) { removalTarget = nil }
-        } message: { target in
-            // Named rather than addressed when the row is hidden, so confirming
-            // a deletion does not put the address back on screen.
-            let described = isRevealed(target.id) ? target.displayDestination : "“\(target.name)”"
-            Text("This removes the saved details for \(described) from this Mac, along with its "
-                 + "history. Nothing on that machine is changed.")
+            Button("Cancel", role: .cancel) { removalTargets = nil }
+        } message: { targets in
+            Text(removalAlertMessage(for: targets))
         }
+    }
+
+    private var removalAlertTitle: String {
+        guard let targets = removalTargets else { return "Remove?" }
+        if targets.count == 1 {
+            return "Remove “\(targets[0].name)”?"
+        }
+        return "Remove \(targets.count) connections?"
+    }
+
+    /// Named rather than addressed when a single row is hidden, so confirming
+    /// a deletion does not put the address back on screen.
+    private func removalAlertMessage(for targets: [SSHConnection]) -> String {
+        if targets.count == 1, let target = targets.first {
+            let described = isRevealed(target.id) ? target.displayDestination : "“\(target.name)”"
+            return "This removes the saved details for \(described) from this Mac, along with its "
+                + "history. Nothing on that machine is changed."
+        }
+        return "This removes the saved details for these machines from this Mac, along with their "
+            + "history. Nothing on those machines is changed."
     }
 
     // MARK: - List
@@ -106,10 +143,21 @@ struct ContentView: View {
     private var listArea: some View {
         if store.isLocked {
             ContentUnavailableView {
-                Label("Your connections are encrypted", systemImage: "lock.fill")
+                Label(
+                    store.storageError == nil
+                        ? "Your connections are encrypted"
+                        : "The encrypted file could not be opened",
+                    systemImage: store.storageError == nil ? "lock.fill" : "exclamationmark.shield.fill")
             } description: {
-                Text("The key in your Keychain is missing or no longer fits, so they could not be "
-                     + "opened automatically. Your recovery passphrase will open them.")
+                if let storageError = store.storageError {
+                    Text(storageError)
+                    Text("If you still have the recovery passphrase, Unlock may open an undamaged "
+                         + "key slot. If the sealed contents themselves were altered, restore from "
+                         + "an export instead.")
+                } else {
+                    Text("The key in your Keychain is missing or no longer fits, so they could not be "
+                         + "opened automatically. Your recovery passphrase will open them.")
+                }
             } actions: {
                 Button("Unlock…") { sheet = .unlock }
             }
@@ -243,8 +291,12 @@ struct ContentView: View {
             .disabledCustomizationBehavior(.visibility)
         }
         .contextMenu(forSelectionType: SSHConnection.ID.self) { ids in
-            if let id = ids.first, let connection = store.connection(with: id) {
-                Button(sessions.state(for: id).isConnected ? "Open in Terminal" : "Connect") {
+            let connections = ids.compactMap { store.connection(with: $0) }
+            if connections.count == 1, let connection = connections.first {
+                let id = connection.id
+                Button(sessions.state(for: id).isConnected
+                       ? "Open in Terminal"
+                       : connection.connectMode.buttonTitle) {
                     activate(connection)
                 }
                 Button("Edit…") { sheet = .edit(connection) }
@@ -253,17 +305,27 @@ struct ContentView: View {
                 Button(isRevealed(id) ? "Hide Details" : "Show Details") {
                     toggleReveal(id)
                 }
+                Button("Activity…") { sheet = .activity(connection) }
                 Divider()
-                Button("Remove…", role: .destructive) { removalTarget = connection }
+                Button("Remove…", role: .destructive) { removalTargets = [connection] }
                     .disabled(sessions.state(for: id).isConnected
                               || sessions.state(for: id).isConnecting)
+            } else if connections.count > 1 {
+                // Multi-select is for batch delete only. Connect and Edit need
+                // one machine; offering them for a set would mean guessing.
+                Button("Remove…", role: .destructive) { removalTargets = connections }
+                    .disabled(connections.contains {
+                        let state = sessions.state(for: $0.id)
+                        return state.isConnected || state.isConnecting
+                    })
             }
         } primaryAction: { ids in
-            // Double-click.
-            if let id = ids.first, let connection = store.connection(with: id) {
-                selection = id
-                activate(connection)
-            }
+            // Double-click only when one row is involved.
+            guard ids.count == 1,
+                  let id = ids.first,
+                  let connection = store.connection(with: id) else { return }
+            selection = [id]
+            activate(connection)
         }
     }
 
@@ -278,20 +340,21 @@ struct ContentView: View {
     }
 
     /// Per-row reveal, beside the status dot.
+    ///
+    /// `Table` with `Set` selection routes cell clicks into row selection and
+    /// never delivers them to SwiftUI `Button` / `onTapGesture`. An AppKit
+    /// button owns the mouse event, so the eye still works.
     private func hideButton(for connection: SSHConnection) -> some View {
         let shown = isRevealed(connection.id)
-        return Button {
+        return RevealToggleControl(isRevealed: shown) {
+            selection = [connection.id]
             toggleReveal(connection.id)
-        } label: {
-            Image(systemName: shown ? "eye.slash" : "eye")
-                .font(.system(size: 11))
-                .foregroundStyle(shown ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .frame(width: 20, height: 20)
         .help(shown
               ? "Hide this connection's username, address and dates"
               : "Show this one, and hide whichever is showing now")
+        .accessibilityLabel(shown ? "Hide details" : "Show details")
     }
 
     /// Bound to the menu, and to the same state the header's own right-click
@@ -374,16 +437,20 @@ struct ContentView: View {
             Button("Add") { sheet = .add }
                 .disabled(store.isLocked)
 
-            // Edit and Remove are absent rather than dimmed when there is
-            // nothing to act on. A permanently greyed button is furniture.
+            // Edit only when exactly one row is selected. Remove works for one
+            // or many. Both are absent rather than dimmed when there is nothing
+            // to act on.
             if let connection = selectedConnection {
                 Button("Edit") { sheet = .edit(connection) }
                     .disabled(store.isLocked || selectedState.isConnected
                               || selectedState.isConnecting)
+            }
 
-                Button("Remove") { removalTarget = connection }
-                    .disabled(store.isLocked || selectedState.isConnected
-                              || selectedState.isConnecting)
+            if !selectedConnections.isEmpty {
+                Button(selection.count == 1 ? "Remove" : "Remove (\(selection.count))") {
+                    removalTargets = selectedConnections
+                }
+                .disabled(store.isLocked || selectionIsBusy)
             }
 
             Button {
@@ -410,38 +477,43 @@ struct ContentView: View {
 
     @ViewBuilder
     private var trailingControls: some View {
-        switch selectedState {
-        case .connecting:
-            Button("Cancel") {
-                if let id = selection { sessions.cancelConnect(id) }
-            }
-            .keyboardShortcut(.cancelAction)
-
-        case .connected:
-            Button("Disconnect") {
-                if let id = selection { sessions.disconnect(id) }
-            }
-            Button("Open in Terminal") {
-                if let id = selection { sessions.openInTerminal(id) }
-            }
-            .keyboardShortcut(.defaultAction)
-
-        case .idle, .failed, .unlocked:
-            Picker("Connect mode", selection: $connectMode) {
-                ForEach(ConnectMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
+        // Wake / Connect only for a single selection. A set of hosts does not
+        // share one password sheet or one connect mode safely.
+        if let connection = selectedConnection {
+            switch selectedState {
+            case .connecting:
+                Button("Cancel") {
+                    sessions.cancelConnect(connection.id)
                 }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .fixedSize()
-            .help(connectMode.explanation)
+                .keyboardShortcut(.cancelAction)
 
-            Button("Connect") {
-                if let connection = selectedConnection { activate(connection) }
+            case .connected:
+                Button("Disconnect") {
+                    sessions.disconnect(connection.id)
+                }
+                Button("Open in Terminal") {
+                    sessions.openInTerminal(connection.id)
+                }
+                .keyboardShortcut(.defaultAction)
+
+            case .idle, .failed, .unlocked:
+                Picker("Connect mode", selection: connectModeBinding) {
+                    ForEach(ConnectMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .disabled(store.isLocked)
+                .help(connection.connectMode.explanation)
+
+                Button(connection.connectMode.buttonTitle) {
+                    activate(connection)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(store.isLocked)
             }
-            .keyboardShortcut(.defaultAction)
-            .disabled(selectedConnection == nil || store.isLocked)
         }
     }
 
@@ -456,7 +528,7 @@ struct ContentView: View {
                 title: "New Connection",
                 onSave: { connection in
                     store.add(connection)
-                    selection = connection.id
+                    selection = [connection.id]
                     sheet = nil
                 },
                 onCancel: { sheet = nil })
@@ -474,9 +546,16 @@ struct ContentView: View {
         case .password(let connection):
             PasswordPromptView(
                 connection: connection,
-                onConnect: { entered in
+                onConnect: { entered, mode in
                     sheet = nil
-                    sessions.connect(connection, password: SecureBuffer(entered), mode: connectMode)
+                    var latest = store.connection(with: connection.id) ?? connection
+                    if latest.connectMode != mode {
+                        latest.connectMode = mode
+                        store.update(latest)
+                        latest = store.connection(with: connection.id) ?? latest
+                    }
+                    sessions.connect(
+                        latest, password: SecureBuffer(entered), mode: mode)
                 },
                 onCancel: { sheet = nil })
 
@@ -489,10 +568,16 @@ struct ContentView: View {
                     sheet = nil
                     Task { @MainActor in
                         try? await Task.sleep(nanoseconds: 350_000_000)
-                        sheet = .password(connection)
+                        sheet = .password(store.connection(with: connection.id) ?? connection)
                     }
                 },
                 onCancel: { sheet = nil })
+
+        case .activity(let connection):
+            ActivityLogView(
+                connection: connection,
+                entries: sessions.diagnostics(for: connection.id),
+                onDismiss: { sheet = nil })
 
         case .unlock:
             PassphraseSheet(
@@ -510,6 +595,19 @@ struct ContentView: View {
 
     // MARK: - Actions
 
+    /// The selected row's Connect mode. Changing it is saved on that
+    /// connection, so the next machine in the list keeps its own setting.
+    private var connectModeBinding: Binding<ConnectMode> {
+        Binding(
+            get: { selectedConnection?.connectMode ?? .unlock },
+            set: { newMode in
+                guard var connection = selectedConnection,
+                      connection.connectMode != newMode else { return }
+                connection.connectMode = newMode
+                store.update(connection)
+            })
+    }
+
     /// Connect, or open a terminal when the session is already up.
     private func activate(_ connection: SSHConnection) {
         switch sessions.state(for: connection.id) {
@@ -518,7 +616,7 @@ struct ContentView: View {
         case .connecting:
             break
         case .idle, .failed, .unlocked:
-            sheet = .password(connection)
+            sheet = .password(store.connection(with: connection.id) ?? connection)
         }
     }
 }
@@ -547,11 +645,59 @@ struct StatusDot: View {
     private var label: String {
         switch state {
         case .idle: return "Not connected"
-        case .connecting: return "Connecting"
+        case .connecting(let stage): return stage
         case .connected: return "Connected"
         case .unlocked: return "Logged in, then closed"
         case .failed(let failure): return failure.headline
         }
+    }
+}
+
+/// Eye control that works inside a multi-select `Table`.
+///
+/// SwiftUI controls in table cells lose clicks to row selection once
+/// `selection` is a `Set`. `NSButton` receives the event before the table
+/// claims it for selection.
+private struct RevealToggleControl: NSViewRepresentable {
+    var isRevealed: Bool
+    var action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(frame: .zero)
+        button.bezelStyle = .inline
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.setButtonType(.momentaryChange)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.clicked)
+        applyAppearance(to: button)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        applyAppearance(to: button)
+    }
+
+    private func applyAppearance(to button: NSButton) {
+        let name = isRevealed ? "eye.slash" : "eye"
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+        button.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        button.contentTintColor = isRevealed ? .controlAccentColor : .secondaryLabelColor
+        button.toolTip = isRevealed
+            ? "Hide this connection's username, address and dates"
+            : "Show this one, and hide whichever is showing now"
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+        init(action: @escaping () -> Void) { self.action = action }
+        @objc func clicked() { action() }
     }
 }
 
@@ -609,7 +755,7 @@ enum Column: String, CaseIterable, Identifiable {
     /// scrolls.
     var minimumWidth: CGFloat {
         switch self {
-        case .status: return 42
+        case .status: return 52
         case .name: return 90
         case .username: return 70
         case .host: return 90
@@ -623,7 +769,7 @@ enum Column: String, CaseIterable, Identifiable {
     /// What it asks for when there is room.
     var idealWidth: CGFloat {
         switch self {
-        case .status: return 42
+        case .status: return 52
         case .name: return 130
         case .username: return 95
         case .host: return 135

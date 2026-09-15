@@ -26,6 +26,7 @@
 		AB0000000000000000000046 /* TerminalHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000011 /* TerminalHandoff.swift */; };
 		AB0000000000000000000047 /* NetworkScope.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000012 /* NetworkScope.swift */; };
 		AB0000000000000000000048 /* DiagnosticsReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000013 /* DiagnosticsReport.swift */; };
+		AB000000000000000000008E /* NetworkWake.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000008F /* NetworkWake.swift */; };
 		AB0000000000000000000049 /* ConnectionVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000014 /* ConnectionVault.swift */; };
 		AB000000000000000000004A /* KeychainKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000015 /* KeychainKeyStore.swift */; };
 		AB000000000000000000004B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000016 /* ContentView.swift */; };
@@ -36,6 +37,7 @@
 		AB0000000000000000000050 /* HelpNotes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001B /* HelpNotes.swift */; };
 		AB0000000000000000000051 /* PassphraseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001C /* PassphraseSheet.swift */; };
 		AB0000000000000000000052 /* SecuritySettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001D /* SecuritySettingsView.swift */; };
+		AB0000000000000000000089 /* ActivityLogView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000088 /* ActivityLogView.swift */; };
 		AB0000000000000000000053 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001E /* Assets.xcassets */; };
 		AB0000000000000000000054 /* AbandonedSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000001F /* AbandonedSessionTests.swift */; };
 		AB0000000000000000000055 /* ColumnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000020 /* ColumnTests.swift */; };
@@ -47,6 +49,7 @@
 		AB000000000000000000005B /* HostKeyWritingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000026 /* HostKeyWritingTests.swift */; };
 		AB000000000000000000005C /* KeychainKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000027 /* KeychainKeyStoreTests.swift */; };
 		AB000000000000000000005D /* NetworkScopeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000028 /* NetworkScopeTests.swift */; };
+		AB0000000000000000000090 /* NetworkWakeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000091 /* NetworkWakeTests.swift */; };
 		AB000000000000000000005E /* PasswordChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000029 /* PasswordChannelTests.swift */; };
 		AB000000000000000000005F /* ProcessRunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002A /* ProcessRunnerTests.swift */; };
 		AB0000000000000000000060 /* ProtectedFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB000000000000000000002B /* ProtectedFileTests.swift */; };
@@ -88,6 +91,7 @@
 		AB0000000000000000000011 /* TerminalHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalHandoff.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000012 /* NetworkScope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkScope.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000013 /* DiagnosticsReport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DiagnosticsReport.swift"; sourceTree = "<group>"; };
+		AB000000000000000000008F /* NetworkWake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkWake.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000014 /* ConnectionVault.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionVault.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000015 /* KeychainKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainKeyStore.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000016 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
@@ -98,7 +102,9 @@
 		AB000000000000000000001B /* HelpNotes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HelpNotes.swift"; sourceTree = "<group>"; };
 		AB000000000000000000001C /* PassphraseSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PassphraseSheet.swift"; sourceTree = "<group>"; };
 		AB000000000000000000001D /* SecuritySettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SecuritySettingsView.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000088 /* ActivityLogView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ActivityLogView.swift"; sourceTree = "<group>"; };
 		AB000000000000000000001E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+		AB000000000000000000008B /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 		AB000000000000000000001F /* AbandonedSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AbandonedSessionTests.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000020 /* ColumnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ColumnTests.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000021 /* ConnectionHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ConnectionHistoryTests.swift"; sourceTree = "<group>"; };
@@ -109,6 +115,7 @@
 		AB0000000000000000000026 /* HostKeyWritingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "HostKeyWritingTests.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000027 /* KeychainKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "KeychainKeyStoreTests.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000028 /* NetworkScopeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkScopeTests.swift"; sourceTree = "<group>"; };
+		AB0000000000000000000091 /* NetworkWakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NetworkWakeTests.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000029 /* PasswordChannelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PasswordChannelTests.swift"; sourceTree = "<group>"; };
 		AB000000000000000000002A /* ProcessRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProcessRunnerTests.swift"; sourceTree = "<group>"; };
 		AB000000000000000000002B /* ProtectedFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ProtectedFileTests.swift"; sourceTree = "<group>"; };
@@ -168,6 +175,7 @@
 				AB0000000000000000000010 /* HostKeyService.swift */,
 				AB0000000000000000000011 /* TerminalHandoff.swift */,
 				AB0000000000000000000012 /* NetworkScope.swift */,
+				AB000000000000000000008F /* NetworkWake.swift */,
 				AB0000000000000000000013 /* DiagnosticsReport.swift */,
 			);
 			path = "SSH";
@@ -184,6 +192,7 @@
 				AB000000000000000000001B /* HelpNotes.swift */,
 				AB000000000000000000001C /* PassphraseSheet.swift */,
 				AB000000000000000000001D /* SecuritySettingsView.swift */,
+				AB0000000000000000000088 /* ActivityLogView.swift */,
 			);
 			path = "Views";
 			sourceTree = "<group>";
@@ -207,8 +216,17 @@
 				AB000000000000000000006A /* Security */,
 				AB0000000000000000000069 /* Views */,
 				AB000000000000000000001E /* Assets.xcassets */,
+				AB000000000000000000008C /* Resources */,
 			);
 			path = "SSH-Wakey";
+			sourceTree = "<group>";
+		};
+		AB000000000000000000008C /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				AB000000000000000000008B /* AppIcon.icns */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		AB000000000000000000006C /* SSH-WakeyTests */ = {
@@ -224,6 +242,7 @@
 				AB0000000000000000000026 /* HostKeyWritingTests.swift */,
 				AB0000000000000000000027 /* KeychainKeyStoreTests.swift */,
 				AB0000000000000000000028 /* NetworkScopeTests.swift */,
+				AB0000000000000000000091 /* NetworkWakeTests.swift */,
 				AB0000000000000000000029 /* PasswordChannelTests.swift */,
 				AB000000000000000000002A /* ProcessRunnerTests.swift */,
 				AB000000000000000000002B /* ProtectedFileTests.swift */,
@@ -366,6 +385,7 @@
 				AB0000000000000000000046 /* TerminalHandoff.swift in Sources */,
 				AB0000000000000000000047 /* NetworkScope.swift in Sources */,
 				AB0000000000000000000048 /* DiagnosticsReport.swift in Sources */,
+				AB000000000000000000008E /* NetworkWake.swift in Sources */,
 				AB0000000000000000000049 /* ConnectionVault.swift in Sources */,
 				AB000000000000000000004A /* KeychainKeyStore.swift in Sources */,
 				AB000000000000000000004B /* ContentView.swift in Sources */,
@@ -376,6 +396,7 @@
 				AB0000000000000000000050 /* HelpNotes.swift in Sources */,
 				AB0000000000000000000051 /* PassphraseSheet.swift in Sources */,
 				AB0000000000000000000052 /* SecuritySettingsView.swift in Sources */,
+				AB0000000000000000000089 /* ActivityLogView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -393,6 +414,7 @@
 				AB000000000000000000005B /* HostKeyWritingTests.swift in Sources */,
 				AB000000000000000000005C /* KeychainKeyStoreTests.swift in Sources */,
 				AB000000000000000000005D /* NetworkScopeTests.swift in Sources */,
+				AB0000000000000000000090 /* NetworkWakeTests.swift in Sources */,
 				AB000000000000000000005E /* PasswordChannelTests.swift in Sources */,
 				AB000000000000000000005F /* ProcessRunnerTests.swift in Sources */,
 				AB0000000000000000000060 /* ProtectedFileTests.swift in Sources */,
@@ -482,17 +504,22 @@
 		AB0000000000000000000077 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "SSH-Wakey/Info.plist";
+				INFOPLIST_KEY_CFBundleIconFile = AppIcon;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "SSH-Wakey reaches Macs on your network to wake them and open SSH.";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.CadenGithubB.sshwakey;
 				PRODUCT_MODULE_NAME = SSH_Wakey;
 				PRODUCT_NAME = "SSH-Wakey";
@@ -503,18 +530,23 @@
 		AB0000000000000000000078 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "SSH-Wakey/Info.plist";
+				INFOPLIST_KEY_CFBundleIconFile = AppIcon;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "SSH-Wakey reaches Macs on your network to wake them and open SSH.";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.CadenGithubB.sshwakey;
 				PRODUCT_MODULE_NAME = SSH_Wakey;
 				PRODUCT_NAME = "SSH-Wakey";

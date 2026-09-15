@@ -1,8 +1,12 @@
 import Foundation
 
-/// What Connect should actually do.
-enum ConnectMode: String, CaseIterable, Identifiable, Sendable {
-    /// Log in to prove the password works, then close straight away.
+/// What the primary button should actually do for one saved connection.
+///
+/// The default is to log in, wake the Mac via SSH, then disconnect. That is
+/// what a machine waiting at FileVault needs, and it is what the button does
+/// unless this connection was set to hold a session open.
+enum ConnectMode: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
+    /// Log in to wake the machine, then close straight away.
     case unlock
     /// Log in and hold the connection open for a shell.
     case session
@@ -11,21 +15,54 @@ enum ConnectMode: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .unlock: return "Connect, Unlock, then disconnect"
+        case .unlock: return "Connect, wake, then disconnect"
         case .session: return "Open a session"
+        }
+    }
+
+    /// The primary button next to the mode menu.
+    var buttonTitle: String {
+        switch self {
+        case .unlock: return "Wake"
+        case .session: return "Connect"
+        }
+    }
+
+    /// A few words for the change history, where the long title is too much.
+    var historyName: String {
+        switch self {
+        case .unlock: return "wake, then disconnect"
+        case .session: return "open a session"
         }
     }
 
     var explanation: String {
         switch self {
         case .unlock:
-            return "Logs in to prove the password works, then closes the connection immediately. "
+            return "Connects, wakes the Mac via SSH, then disconnects. "
                 + "This is what a Mac waiting at the FileVault screen needs: the login is what "
                 + "unlocks its disk, and nothing has to stay open afterwards."
         case .session:
             return "Logs in and holds the connection open, so Open in Terminal can start a shell "
                 + "on it without asking for the password again. It stays up until you disconnect "
                 + "or quit SSH-Wakey."
+        }
+    }
+
+    func idleHeadline(destination: String) -> String {
+        switch self {
+        case .unlock: return "Ready to wake \(destination) via SSH."
+        case .session: return "Ready to open a session to \(destination)."
+        }
+    }
+
+    var idleGuidance: String {
+        switch self {
+        case .unlock:
+            return "Wake asks for the password, uses it once to connect, then disconnects. "
+                + "That is what a Mac at the FileVault screen needs."
+        case .session:
+            return "Connect asks for the password, uses it once, and then keeps the session open."
         }
     }
 }

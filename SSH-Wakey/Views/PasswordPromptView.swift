@@ -4,35 +4,49 @@ import SwiftUI
 
 /// Asks for the password for one connection attempt.
 ///
-/// The text lives in this view's state only until Connect is pressed. It is
-/// handed straight to a `SecureBuffer` and the binding is cleared in the same
-/// turn, so the `String` is unreferenced as early as Swift allows.
+/// The destination and the mode sit together because they are the two facts
+/// this sheet exists to confirm: where the password is going, and what will
+/// happen after it is accepted. The destination cannot be edited here; the
+/// mode can, so a wrong picker in the window does not mean cancelling and
+/// typing the password again.
+///
+/// The text lives in this view's state only until Wake or Connect is pressed.
+/// It is handed straight to a `SecureBuffer` and the binding is cleared in the
+/// same turn, so the `String` is unreferenced as early as Swift allows.
 struct PasswordPromptView: View {
 
     let connection: SSHConnection
-    var onConnect: (String) -> Void
+    var onConnect: (String, ConnectMode) -> Void
     var onCancel: () -> Void
 
+    @State private var mode: ConnectMode
     @State private var password = ""
     @State private var secureInput = SecureInputSession()
     @FocusState private var focused: Bool
 
+    init(
+        connection: SSHConnection,
+        onConnect: @escaping (String, ConnectMode) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.connection = connection
+        self.onConnect = onConnect
+        self.onCancel = onCancel
+        _mode = State(initialValue: connection.connectMode)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 10) {
                     Image(systemName: "lock.shield")
                         .font(.system(size: 22))
                         .foregroundStyle(.tint)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Password for \(connection.name)")
-                            .font(.headline)
-                        Text(connection.displayDestination)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
+                    Text("Password for \(connection.name)")
+                        .font(.headline)
                 }
+
+                confirmation
 
                 SecureField("Password", text: $password)
                     .textFieldStyle(.roundedBorder)
@@ -56,13 +70,13 @@ struct PasswordPromptView: View {
                 }
                 .keyboardShortcut(.cancelAction)
 
-                Button("Connect", action: submit)
+                Button(mode.buttonTitle, action: submit)
                     .keyboardShortcut(.defaultAction)
                     .disabled(password.isEmpty)
             }
             .padding(16)
         }
-        .frame(width: 420)
+        .frame(width: 440)
         .onAppear {
             focused = true
             secureInput.acquire()
@@ -76,11 +90,43 @@ struct PasswordPromptView: View {
             for: NSApplication.didResignActiveNotification)) { _ in secureInput.release() }
     }
 
+    /// Where it goes, and what happens next, as two facts in one block.
+    private var confirmation: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+            GridRow {
+                Text("To")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .gridColumnAlignment(.trailing)
+                Text(connection.displayDestination)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+                    .gridColumnAlignment(.leading)
+            }
+            GridRow {
+                Text("Then")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Picker("Then", selection: $mode) {
+                    ForEach(ConnectMode.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .help(mode.explanation)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
     private func submit() {
         guard !password.isEmpty else { return }
         let entered = password
         password = ""
-        onConnect(entered)
+        onConnect(entered, mode)
     }
 }
 

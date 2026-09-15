@@ -50,6 +50,15 @@ enum VaultError: LocalizedError, Equatable {
     case corrupted(String)
     case passphraseTooShort(Int)
 
+    /// True when the sealed file itself failed its checks, rather than the
+    /// person presenting the wrong passphrase or no Keychain item.
+    var suggestsIntegrityProblem: Bool {
+        switch self {
+        case .corrupted, .keychainKeyDoesNotFit: return true
+        case .unsupportedFormat, .wrongPassphrase, .passphraseTooShort: return false
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .unsupportedFormat(let format):
@@ -57,10 +66,13 @@ enum VaultError: LocalizedError, Equatable {
         case .wrongPassphrase:
             return "That recovery passphrase is not correct."
         case .keychainKeyDoesNotFit:
-            return "The key in the Keychain does not open this file. It may belong to a different "
-                + "copy of your connections. Use the recovery passphrase instead."
+            return "The key in your Keychain could not open the encrypted file. "
+                + "The file may have been altered, or this key may belong to a different copy. "
+                + "Try the recovery passphrase."
         case .corrupted(let detail):
-            return "The encrypted file could not be read: \(detail)"
+            return "The encrypted connections file looks damaged or altered — its seal no longer "
+                + "checks out (\(detail)). Do not trust this copy; restore from an export if you "
+                + "have one."
         case .passphraseTooShort(let minimum):
             return "The recovery passphrase must be at least \(minimum) characters."
         }

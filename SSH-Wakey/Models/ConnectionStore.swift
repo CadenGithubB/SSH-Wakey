@@ -63,23 +63,43 @@ final class ConnectionStore {
             switch try fileStore.read() {
             case .empty:
                 adopt(connections: [], vault: nil, dataKey: nil, encrypted: false)
+                storageError = nil
             case .plain(let saved):
                 adopt(connections: saved, vault: nil, dataKey: nil, encrypted: false)
+                storageError = nil
             case .encrypted(let stored):
-                // The Keychain slot is the silent path. When it is missing the
-                // file is not lost, it is locked, and the recovery passphrase
-                // opens it.
-                if let keychainKey = try? KeychainKeyStore.load(account: keychainAccount),
-                   let key = try? VaultCrypto.dataKey(from: stored, keychainKey: keychainKey),
-                   let saved = try? VaultCrypto.connections(in: stored, using: key) {
-                    adopt(connections: saved, vault: stored, dataKey: key, encrypted: true)
-                } else {
-                    adopt(connections: [], vault: stored, dataKey: nil, encrypted: true)
-                }
+                try openEncrypted(stored)
             }
-            storageError = nil
         } catch {
             adopt(connections: [], vault: nil, dataKey: nil, encrypted: false)
+            storageError = error.localizedDescription
+        }
+    }
+
+    /// Opens an encrypted file with the Keychain key when it is there.
+    ///
+    /// Missing Keychain material is ordinary lock, not an error. A Keychain key
+    /// that is present but cannot open the seal, or a payload that fails its
+    /// AES-GCM check, is treated as an integrity problem and shown as such —
+    /// while still leaving the file locked so the recovery passphrase can be
+    /// tried when that still makes sense.
+    private func openEncrypted(_ stored: ConnectionVault) throws {
+        guard let keychainKey = try? KeychainKeyStore.load(account: keychainAccount) else {
+            adopt(connections: [], vault: stored, dataKey: nil, encrypted: true)
+            storageError = nil
+            return
+        }
+
+        do {
+            let key = try VaultCrypto.dataKey(from: stored, keychainKey: keychainKey)
+            let saved = try VaultCrypto.connections(in: stored, using: key)
+            adopt(connections: saved, vault: stored, dataKey: key, encrypted: true)
+            storageError = nil
+        } catch let error as VaultError where error.suggestsIntegrityProblem {
+            adopt(connections: [], vault: stored, dataKey: nil, encrypted: true)
+            storageError = error.localizedDescription
+        } catch {
+            adopt(connections: [], vault: stored, dataKey: nil, encrypted: true)
             storageError = error.localizedDescription
         }
     }
@@ -117,6 +137,9 @@ final class ConnectionStore {
         var updated = connection.normalized
         updated.createdAt = previous.createdAt
         updated.revisions = previous.revisions
+        if updated.host != previous.host {
+            updated.hardwareAddress = nil
+        }
 
         let changes = updated.changes(from: previous)
         if changes.isEmpty {
@@ -135,9 +158,25 @@ final class ConnectionStore {
         sortAndSave()
     }
 
+    /// Writes a MAC learned from ARP after a successful connect, so the next
+    /// Wake can send a magic packet. Not typed by the person.
+    func rememberLinkAddress(_ address: String, for id: SSHConnection.ID) {
+        guard var connection = connection(with: id),
+              let mac = NetworkWake.MACAddress(parsing: address) else { return }
+        let stored = mac.colonSeparated
+        guard connection.hardwareAddress != stored else { return }
+        connection.hardwareAddress = stored
+        update(connection)
+    }
+
     func remove(id: SSHConnection.ID) {
-        guard access == .open else { return }
-        connections.removeAll { $0.id == id }
+        remove(ids: [id])
+    }
+
+    /// Drops several connections in one save, for the multi-select Remove.
+    func remove(ids: Set<SSHConnection.ID>) {
+        guard access == .open, !ids.isEmpty else { return }
+        connections.removeAll { ids.contains($0.id) }
         sortAndSave()
     }
 

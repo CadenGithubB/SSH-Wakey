@@ -31,7 +31,14 @@ enum HelpNotes {
             title: "It remembers the connection details so you do not have to",
             body: """
             SSH-Wakey keeps a name, a username, an address and a port for each machine you need to \
-            reach. Pick one from the list, press Connect, and it builds the ssh command for you.
+            reach. Pick one from the list and press Wake: it connects, wakes the Mac via SSH, then \
+            disconnects. That is the default. Open a session is there when you want a shell instead. \
+            Each machine remembers which of those two you chose.
+
+            Right-click a row for Activity: what happened on recent attempts to that machine, while \
+            this app has been open. Command-click or Shift-click several rows to remove them \
+            together. Wake, Connect and Edit stay one machine at a time, because a set of hosts \
+            does not share one password or one destination.
 
             It saves no passwords and no keys. There is no sync, no network scanning and no \
             telemetry. The list is an ordinary file in your Library folder that only your account \
@@ -40,15 +47,27 @@ enum HelpNotes {
 
         HelpTopic(
             icon: "terminal",
-            title: "Connecting authenticates once, then hands you a shell",
+            title: "Wake connects via SSH, then disconnects",
             body: """
-            Connect starts a single ssh process that logs in and then holds the connection open \
-            without running anything on the other machine. Once it says Connected, Open in Terminal \
-            starts an ordinary shell that joins that already-authenticated connection, so you are \
-            never asked for the password a second time.
+            The default button is Wake. It logs in just long enough to wake a Mac waiting at the \
+            FileVault screen, then closes the connection. Nothing is left running and no Terminal \
+            window opens. The login is what unlocks the disk; the connection does not need to stay \
+            open afterwards.
 
-            The session belongs to SSH-Wakey while it runs. Quitting the app closes the connection, \
-            and any Terminal window using it, which is why it asks before quitting.
+            Open a session is the other option. It logs in and holds the connection open. Once it \
+            says Connected, Open in Terminal starts an ordinary shell on that already-authenticated \
+            connection, so you are never asked for the password a second time. The session belongs \
+            to SSH-Wakey while it runs. Quitting the app closes it, and any Terminal window using \
+            it, which is why it asks before quitting.
+
+            Each saved machine remembers which of those two you chose, so waking one Mac does not \
+            change what the button does on the next. The password sheet shows the destination and \
+            the mode together. You can still change the mode there, and that change is saved on \
+            this machine.
+
+            Before SSH, Wake sends a short network poke the machine can hear while asleep, then \
+            waits. The status line says Waking the machine... during that. It is not Apple Remote \
+            Desktop; it is the same idea: wake first, then log in.
             """),
 
         HelpTopic(
@@ -61,7 +80,7 @@ enum HelpNotes {
 
             It is also never reused. If the machine rejects it, ssh asks again for a second login \
             method and SSH-Wakey does not answer, because that would be a silent retry with a \
-            password already known to be wrong. You press Connect and type it again instead.
+            password already known to be wrong. You press Wake or Connect and type it again instead.
 
             While the password sheet is open it is kept out of screenshots and screen recordings.
             """),
@@ -190,8 +209,8 @@ struct HelpSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("What SSH-Wakey does")
                     .font(.headline)
-                Text("How it connects, what it does with your password, and what it needs from "
-                     + "the other machine.")
+                Text("How it connects, what it remembers per machine, what it does with your "
+                     + "password, and what it needs from the other machine.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

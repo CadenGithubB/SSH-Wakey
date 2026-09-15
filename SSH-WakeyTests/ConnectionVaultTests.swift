@@ -218,4 +218,15 @@ final class ConnectionVaultTests: XCTestCase {
             XCTAssertFalse(error.errorDescription?.isEmpty ?? true, "\(error)")
         }
     }
+
+    func testIntegrityFailuresSayTheFileMayHaveBeenAltered() {
+        let corrupted = VaultError.corrupted("the contents did not decrypt")
+        XCTAssertTrue(corrupted.suggestsIntegrityProblem)
+        XCTAssertTrue(
+            corrupted.errorDescription?.localizedCaseInsensitiveContains("damaged or altered") == true,
+            corrupted.errorDescription ?? "")
+
+        XCTAssertTrue(VaultError.keychainKeyDoesNotFit.suggestsIntegrityProblem)
+        XCTAssertFalse(VaultError.wrongPassphrase.suggestsIntegrityProblem)
+    }
 }

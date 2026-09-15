@@ -10,17 +10,22 @@ struct StatusPanel: View {
     let actionError: String?
     /// Matches the eye toggle in the window, so hiding addresses hides them here too.
     var redactsAddresses = false
+    /// When more than one row is selected, Connect and Edit are off the table and
+    /// this panel says so instead of talking about a single machine.
+    var selectedCount = 0
 
     var onCancel: () -> Void
     var onReviewHostKey: () -> Void
     var onShowHelp: () -> Void
 
+    private var isMultiSelect: Bool { selectedCount > 1 }
+
     @State private var showsDetail = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let storageError {
-                banner(icon: "externaldrive.badge.xmark", tint: .orange, text: storageError)
+            if storageError != nil {
+                storageBanner
             }
             if let actionError {
                 banner(icon: "exclamationmark.triangle.fill", tint: .orange, text: actionError)
@@ -41,11 +46,11 @@ struct StatusPanel: View {
                     }
 
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        if state.isConnecting {
+                        if !isMultiSelect, state.isConnecting {
                             Button("Cancel", action: onCancel)
                                 .controlSize(.small)
                         }
-                        if case .failed(let failure) = state {
+                        if !isMultiSelect, case .failed(let failure) = state {
                             if failure.suggestsLocalNetworkPermission {
                                 Button("Local Network Settings…") {
                                     SystemSettings.openLocalNetworkPrivacy()
@@ -86,7 +91,7 @@ struct StatusPanel: View {
                 }
                 Spacer(minLength: 0)
 
-                if state.isConnecting {
+                if !isMultiSelect, state.isConnecting {
                     ProgressView()
                         .controlSize(.small)
                         .padding(.top, 1)
@@ -110,24 +115,40 @@ struct StatusPanel: View {
         .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
     }
 
+    private var storageBanner: some View {
+        let integrity = storageError?.localizedCaseInsensitiveContains("damaged or altered") == true
+            || storageError?.localizedCaseInsensitiveContains("seal no longer") == true
+        return banner(
+            icon: integrity ? "exclamationmark.shield.fill" : "externaldrive.badge.xmark",
+            tint: integrity ? .red : .orange,
+            text: storageError ?? "")
+    }
+
     @ViewBuilder
     private var icon: some View {
-        switch state {
-        case .idle:
-            Image(systemName: connection == nil ? "sidebar.left" : "terminal")
+        if isMultiSelect {
+            Image(systemName: "checklist")
                 .foregroundStyle(.secondary)
-        case .connecting:
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .foregroundStyle(.blue)
-        case .connected:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-        case .unlocked:
-            Image(systemName: "lock.open.fill")
-                .foregroundStyle(.blue)
-        case .failed(let failure):
-            Image(systemName: failure.kind == .cancelled ? "xmark.circle" : "exclamationmark.triangle.fill")
-                .foregroundStyle(failure.kind == .cancelled ? Color.secondary : Color.red)
+        } else {
+            switch state {
+            case .idle:
+                Image(systemName: connection == nil
+                      ? "sidebar.left"
+                      : (connection?.connectMode == .session ? "terminal" : "lock.open"))
+                    .foregroundStyle(.secondary)
+            case .connecting:
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.blue)
+            case .connected:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .unlocked:
+                Image(systemName: "lock.open.fill")
+                    .foregroundStyle(.blue)
+            case .failed(let failure):
+                Image(systemName: failure.kind == .cancelled ? "xmark.circle" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(failure.kind == .cancelled ? Color.secondary : Color.red)
+            }
         }
     }
 
@@ -137,10 +158,13 @@ struct StatusPanel: View {
     }
 
     private var headline: String {
+        if isMultiSelect {
+            return "\(selectedCount) connections selected."
+        }
         switch state {
         case .idle:
             guard connection != nil else { return "Select a connection." }
-            return "Ready to connect to \(destination)."
+            return (connection?.connectMode ?? .unlock).idleHeadline(destination: destination)
         case .connecting(let stage):
             return stage
         case .connected:
@@ -155,13 +179,18 @@ struct StatusPanel: View {
     }
 
     private var guidance: String? {
+        if isMultiSelect {
+            return "Remove deletes them from this Mac. Wake, Connect and Edit still need one selection."
+        }
         switch state {
         case .idle:
             return connection == nil
                 ? "Add a machine, or pick one from the list."
-                : "Connect asks for the password, uses it once, and then keeps the session open."
-        case .connecting:
-            return HelpNotes.passwordNote
+                : (connection?.connectMode ?? .unlock).idleGuidance
+        case .connecting(let stage):
+            return stage == SSHSessionManager.wakingHeadline
+                ? "A wake packet is on the network. SSH starts once the machine can hear it."
+                : HelpNotes.passwordNote
         case .connected(let info):
             let opened = info.since.formatted(date: .omitted, time: .shortened)
             return info.usedPassword
@@ -172,10 +201,10 @@ struct StatusPanel: View {
             if info.closedByServer {
                 lines.append("The machine closed the connection straight after accepting the "
                     + "password. If it was waiting at the FileVault screen, that is exactly what "
-                    + "unlocking looks like: it is starting up now. Give it a minute, then connect "
-                    + "again for a shell.")
+                    + "waking it looks like: it is starting up now. Give it a minute, then choose "
+                    + "Open a session if you want a shell.")
             } else {
-                lines.append("That is all this mode does. The password was accepted and nothing "
+                lines.append("That is all Wake does. The password was accepted and nothing "
                     + "was left open. If that Mac was waiting at the FileVault screen it is "
                     + "starting up now. Choose Open a session if you want a shell.")
             }

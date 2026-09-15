@@ -106,6 +106,16 @@ struct ConnectionEditorView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
+
+                    Picker("When you press the button", selection: $draft.connectMode) {
+                        ForEach(ConnectMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    Text(draft.connectMode.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if isExisting {

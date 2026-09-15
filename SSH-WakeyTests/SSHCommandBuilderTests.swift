@@ -110,15 +110,22 @@ final class SSHCommandBuilderTests: XCTestCase {
 
     func testTheModesAreDescribedAndStableOnDisk() {
         XCTAssertEqual(ConnectMode.allCases.count, 2)
-        // The raw values are persisted in user defaults, so they must not drift.
+        // The raw values are saved on each connection, so they must not drift.
         XCTAssertEqual(ConnectMode.unlock.rawValue, "unlock")
         XCTAssertEqual(ConnectMode.session.rawValue, "session")
         for mode in ConnectMode.allCases {
             XCTAssertFalse(mode.title.isEmpty)
             XCTAssertFalse(mode.explanation.isEmpty)
+            XCTAssertFalse(mode.buttonTitle.isEmpty)
         }
-        // The label has to say what the button will actually do.
-        XCTAssertEqual(ConnectMode.unlock.title, "Connect, Unlock, then disconnect")
+        XCTAssertEqual(ConnectMode.unlock.title, "Connect, wake, then disconnect")
+        XCTAssertEqual(ConnectMode.unlock.buttonTitle, "Wake")
+        XCTAssertEqual(ConnectMode.session.buttonTitle, "Connect")
+        XCTAssertEqual(SSHConnection().connectMode, .unlock)
+        XCTAssertEqual(
+            ConnectMode.unlock.idleHeadline(destination: "admin@mac.local"),
+            "Ready to wake admin@mac.local via SSH.")
+        XCTAssertTrue(ConnectMode.unlock.idleGuidance.contains("then disconnects"))
     }
 
     func testControlCommandsTargetTheSameSocket() {

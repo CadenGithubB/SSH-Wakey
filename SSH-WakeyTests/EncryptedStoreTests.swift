@@ -85,6 +85,26 @@ final class EncryptedStoreTests: XCTestCase {
         XCTAssertNil(reopened.storageError, "being locked is not an error")
     }
 
+    func testATamperedVaultWarnsAboutIntegrityWhileStayingLocked() throws {
+        try store.enableEncryption(passphrase: passphrase)
+
+        let fileURL = ConnectionFileStore(directoryURL: directory).fileURL
+        var document = try JSONDecoder().decode(
+            ConnectionFileStore.Document.self, from: try Data(contentsOf: fileURL))
+        var vault = try XCTUnwrap(document.vault)
+        vault.payload[vault.payload.count - 1] ^= 0xFF
+        document = ConnectionFileStore.Document(vault: vault)
+        try ProtectedFile.write(try JSONEncoder().encode(document), to: fileURL)
+
+        let reopened = makeStore()
+        XCTAssertTrue(reopened.isLocked)
+        XCTAssertTrue(reopened.connections.isEmpty)
+        let warning = try XCTUnwrap(reopened.storageError)
+        XCTAssertTrue(
+            warning.localizedCaseInsensitiveContains("damaged or altered"),
+            warning)
+    }
+
     func testTheRecoveryPassphraseOpensItAndRestoresSilentOpening() throws {
         try store.enableEncryption(passphrase: passphrase)
         try KeychainKeyStore.delete(account: account)

@@ -26,7 +26,8 @@ final class ConnectionPersistenceTests: XCTestCase {
                           port: 2222, extraArguments: "-o ServerAliveInterval=30",
                           strictHostKeyChecking: true),
             SSHConnection(name: "Build box", username: "ci", host: "build.example.internal",
-                          port: 22, extraArguments: "", strictHostKeyChecking: false),
+                          port: 22, extraArguments: "", strictHostKeyChecking: false,
+                          connectMode: .session, hardwareAddress: "aa:bb:cc:dd:ee:ff"),
         ]
         try store.save(saved)
 
@@ -88,6 +89,19 @@ final class ConnectionPersistenceTests: XCTestCase {
         XCTAssertEqual(loaded.first?.port, 22)
         XCTAssertEqual(loaded.first?.extraArguments, "")
         XCTAssertEqual(loaded.first?.strictHostKeyChecking, true)
+        XCTAssertEqual(loaded.first?.connectMode, .unlock)
+        XCTAssertNil(loaded.first?.hardwareAddress)
+    }
+
+    func testAnUnrecognisedConnectModeFallsBackToWake() throws {
+        let legacy = """
+        {"version":1,"connections":[{"name":"Old","username":"admin","host":"10.0.0.9","connectMode":"nope"}]}
+        """
+        try store.createDirectoryIfNeeded()
+        try Data(legacy.utf8).write(to: store.fileURL)
+
+        let loaded = try store.load()
+        XCTAssertEqual(loaded.first?.connectMode, .unlock)
     }
 
     func testFileFromANewerFormatIsRefusedRatherThanMisread() throws {
@@ -106,9 +120,13 @@ final class ConnectionPersistenceTests: XCTestCase {
         try Data("this is not json".utf8).write(to: store.fileURL)
 
         XCTAssertThrowsError(try store.load()) { error in
-            guard case .unreadable = error as? ConnectionFileStore.StoreError else {
-                return XCTFail("Expected .unreadable, got \(error)")
+            guard case .damagedOrAltered = error as? ConnectionFileStore.StoreError else {
+                return XCTFail("Expected .damagedOrAltered, got \(error)")
             }
+            XCTAssertTrue(
+                (error as? LocalizedError)?.errorDescription?
+                    .localizedCaseInsensitiveContains("damaged or altered") == true,
+                String(describing: error))
         }
     }
 

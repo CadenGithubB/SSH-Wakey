@@ -71,6 +71,31 @@ final class ConnectionHistoryTests: XCTestCase {
         XCTAssertEqual(summary, "Known host key: required → trust on first use")
     }
 
+    func testChangingConnectModeIsRecordedInWords() throws {
+        store.add(makeConnection())
+        var edited = try XCTUnwrap(store.connections.first)
+        XCTAssertEqual(edited.connectMode, .unlock)
+        edited.connectMode = .session
+        store.update(edited)
+
+        let saved = try XCTUnwrap(store.connections.first)
+        XCTAssertEqual(saved.connectMode, .session)
+        XCTAssertEqual(saved.revisions.first?.summary, "Connect: wake, then disconnect → open a session")
+    }
+
+    func testChangingHostForgetsTheLearnedHardwareAddress() throws {
+        store.add(makeConnection())
+        var edited = try XCTUnwrap(store.connections.first)
+        edited.hardwareAddress = "aa:bb:cc:dd:ee:ff"
+        store.update(edited)
+        XCTAssertEqual(store.connections.first?.hardwareAddress, "aa:bb:cc:dd:ee:ff")
+
+        edited = try XCTUnwrap(store.connections.first)
+        edited.host = "10.0.0.1"
+        store.update(edited)
+        XCTAssertNil(store.connections.first?.hardwareAddress)
+    }
+
     func testHistoryDoesNotGrowWithoutBound() throws {
         store.add(makeConnection())
         for index in 1...(SSHConnection.maxRevisions + 5) {
@@ -118,6 +143,17 @@ final class ConnectionHistoryTests: XCTestCase {
         XCTAssertNil(loaded.createdAt)
         XCTAssertNil(loaded.modifiedAt)
         XCTAssertTrue(loaded.revisions.isEmpty)
+    }
+
+    func testRemovingSeveralAtOnceLeavesTheOthers() throws {
+        store.add(SSHConnection(name: "A", username: "admin", host: "10.0.0.1"))
+        store.add(SSHConnection(name: "B", username: "admin", host: "10.0.0.2"))
+        store.add(SSHConnection(name: "C", username: "admin", host: "10.0.0.3"))
+        let doomed = Set(store.connections.filter { $0.name != "B" }.map(\.id))
+
+        store.remove(ids: doomed)
+
+        XCTAssertEqual(store.connections.map(\.name), ["B"])
     }
 
     func testANewConnectionDoesNotGuessTheUsername() {
