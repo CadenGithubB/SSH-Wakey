@@ -14,7 +14,7 @@ struct SSHWakeyApp: App {
     @State private var sessions = SSHSessionManager()
 
     var body: some Scene {
-        Window("SSH-Wakey", id: "main") {
+        Window(AppDistribution.windowTitle, id: "main") {
             ContentView(store: store, sessions: sessions)
         }
         .defaultSize(width: Column.minimumWindowWidth + 120, height: 600)
@@ -26,7 +26,7 @@ struct SSHWakeyApp: App {
                 }
                 Divider()
                 Button("Save Diagnostics…", action: saveDiagnostics)
-                    .disabled(sessions.diagnostics.isEmpty)
+                    .disabled(sessions.diagnostics.isEmpty || !store.allowsDiagnostics)
             }
         }
 
@@ -49,6 +49,7 @@ extension SSHWakeyApp {
     /// The default Help item opens a help book this app does not have, so the
     /// whole group is replaced rather than added to.
     private func saveDiagnostics() {
+        guard store.allowsDiagnostics else { return }
         let panel = NSSavePanel()
         panel.title = "Save Diagnostics"
         panel.nameFieldStringValue = DiagnosticsReport.suggestedFileName()
@@ -82,6 +83,35 @@ extension SSHWakeyApp {
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     weak var sessions: SSHSessionManager?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        Self.bringToFront()
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.bringToFront()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // After a Keychain Allow sheet, SecurityAgent was front; without this
+        // the app stays at the back of Command-Tab even though it just launched.
+        Self.bringToFront()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        Self.bringToFront()
+        return true
+    }
+
+    /// Command-Tab is most-recently-used. If we never become the active app,
+    /// a just-launched SSH-Wakey sits last behind whatever was already front
+    /// (and behind the Keychain prompt, which is another process).
+    static func bringToFront() {
+        NSApp.activate(ignoringOtherApps: true)
+        for window in NSApp.windows where !window.isSheet {
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true

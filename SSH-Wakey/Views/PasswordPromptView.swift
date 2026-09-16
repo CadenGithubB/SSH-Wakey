@@ -16,6 +16,7 @@ import SwiftUI
 struct PasswordPromptView: View {
 
     let connection: SSHConnection
+    var allowsModeSwitch = true
     var onConnect: (String, ConnectMode) -> Void
     var onCancel: () -> Void
 
@@ -26,13 +27,15 @@ struct PasswordPromptView: View {
 
     init(
         connection: SSHConnection,
+        allowsModeSwitch: Bool = true,
         onConnect: @escaping (String, ConnectMode) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.connection = connection
+        self.allowsModeSwitch = allowsModeSwitch
         self.onConnect = onConnect
         self.onCancel = onCancel
-        _mode = State(initialValue: connection.connectMode)
+        _mode = State(initialValue: allowsModeSwitch ? connection.connectMode : .unlock)
     }
 
     var body: some View {
@@ -107,15 +110,21 @@ struct PasswordPromptView: View {
                 Text("Then")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                Picker("Then", selection: $mode) {
-                    ForEach(ConnectMode.allCases) { option in
-                        Text(option.title).tag(option)
+                if allowsModeSwitch {
+                    Picker("Then", selection: $mode) {
+                        ForEach(ConnectMode.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .fixedSize()
+                    .help(mode.explanation)
+                } else {
+                    Text(ConnectMode.unlock.title)
+                        .font(.system(size: 12))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
-                .help(mode.explanation)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

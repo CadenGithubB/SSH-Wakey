@@ -72,6 +72,8 @@ final class SSHSessionManager {
     var onLearnedLinkAddress: ((UUID, String) -> Void)?
     /// Shown in the status panel while a wake packet is on the network.
     static let wakingHeadline = "Waking the machine..."
+    /// Managed builds never hold a session, even if a caller asks.
+    var forcesUnlock: Bool = AppDistribution.isManagedBuild
 
     private var sessions: [UUID: Session] = [:]
     private var attempts: [UUID: Task<Void, Never>] = [:]
@@ -95,6 +97,7 @@ final class SSHSessionManager {
     /// Takes ownership of `password` and wipes it when the attempt ends,
     /// whether it succeeded, failed or was cancelled.
     func connect(_ connection: SSHConnection, password: SecureBuffer, mode: ConnectMode) {
+        let resolvedMode = forcesUnlock ? ConnectMode.unlock : mode
         let id = connection.id
         guard attempts[id] == nil, sessions[id] == nil else {
             password.wipe()
@@ -106,7 +109,7 @@ final class SSHSessionManager {
             ? Self.wakingHeadline
             : "Starting ssh…")
         attempts[id] = Task { [weak self] in
-            await self?.runAttempt(connection, password: password, mode: mode)
+            await self?.runAttempt(connection, password: password, mode: resolvedMode)
         }
     }
 
@@ -459,6 +462,10 @@ final class SSHSessionManager {
     /// Hands the already-authenticated session to Terminal. No password is
     /// involved: the new ssh client attaches to the existing master.
     func openInTerminal(_ id: UUID) {
+        guard !forcesUnlock else {
+            lastActionError = "This copy of SSH-Wakey cannot open a session."
+            return
+        }
         guard let session = sessions[id],
               FileManager.default.fileExists(atPath: session.controlPath) else {
             lastActionError = SessionError.notConnected.localizedDescription

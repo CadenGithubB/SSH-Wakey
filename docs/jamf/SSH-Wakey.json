@@ -1,0 +1,48 @@
+{
+  "title": "SSH-Wakey Managed",
+  "description": "Assigned machines for the SSH-Wakey Managed app. Preference domain com.CadenGithubB.sshwakey.managed. Keys are ignored unless the profile forces them. Do not put passwords in this payload.",
+  "properties": {
+    "OrganizationName": {
+      "title": "Organization name",
+      "description": "Shown in Settings as “Managed by …”.",
+      "type": "string"
+    },
+    "AllowDiagnostics": {
+      "title": "Allow Save Diagnostics and Activity",
+      "description": "When false, employees cannot write a diagnostics file or open Activity. Default is true.",
+      "type": "boolean",
+      "default": true
+    },
+    "Connections": {
+      "title": "Assigned machines",
+      "description": "The only machines this copy will show. Username and Host are required. No passwords.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "title": "Display name",
+            "type": "string",
+            "description": "Optional. Defaults to the host."
+          },
+          "Username": {
+            "title": "SSH username",
+            "type": "string"
+          },
+          "Host": {
+            "title": "Host or IP",
+            "type": "string"
+          },
+          "Port": {
+            "title": "Port",
+            "type": "integer",
+            "default": 22,
+            "minimum": 1,
+            "maximum": 65535
+          }
+        },
+        "required": ["Username", "Host"]
+      }
+    }
+  }
+}

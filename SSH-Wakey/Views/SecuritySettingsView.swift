@@ -14,8 +14,24 @@ struct SecuritySettingsView: View {
 
     var body: some View {
         Form {
-            Section {
-                LabeledContent("Saved connections") {
+            if store.isManagedBuild {
+                Section {
+                    Label {
+                        Text(store.organizationName.map { "This copy is managed by \($0)." }
+                             ?? "This copy is managed by your organization.")
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "building.2.fill")
+                    }
+                    Text("Machines are assigned by IT. You cannot add, edit or export them, and "
+                         + "this copy only wakes a Mac — it will not open a session.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Section {
+                    LabeledContent("Saved connections") {
                     Label(
                         store.isEncrypted ? "Encrypted on disk" : "Stored in plain text",
                         systemImage: store.isEncrypted ? "lock.fill" : "doc.plaintext")
@@ -46,6 +62,7 @@ struct SecuritySettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
             }
 
             if let note {

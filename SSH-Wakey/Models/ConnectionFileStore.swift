@@ -140,7 +140,7 @@ struct ConnectionFileStore: Sendable {
     static var defaultDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support", isDirectory: true)
-        return base.appendingPathComponent("SSH-Wakey", isDirectory: true)
+        return base.appendingPathComponent(AppDistribution.supportFolderName, isDirectory: true)
     }
 
     let directoryURL: URL

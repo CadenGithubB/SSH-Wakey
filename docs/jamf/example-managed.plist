@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>OrganizationName</key>
+	<string>Example Corp</string>
+	<key>AllowDiagnostics</key>
+	<true/>
+	<key>Connections</key>
+	<array>
+		<dict>
+			<key>Name</key>
+			<string>Office Mac</string>
+			<key>Username</key>
+			<string>jsmith</string>
+			<key>Host</key>
+			<string>192.0.2.10</string>
+			<key>Port</key>
+			<integer>22</integer>
+		</dict>
+		<dict>
+			<key>Name</key>
+			<string>Lab iMac</string>
+			<key>Username</key>
+			<string>wakey</string>
+			<key>Host</key>
+			<string>lab-imac.example.test</string>
+		</dict>
+	</array>
+</dict>
+</plist>

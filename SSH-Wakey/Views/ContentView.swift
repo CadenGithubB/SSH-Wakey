@@ -76,6 +76,8 @@ struct ContentView: View {
                 actionError: sessions.lastActionError,
                 redactsAddresses: !isRevealed(selectedConnection?.id),
                 selectedCount: selection.count,
+                isManagedCatalog: store.isManagedBuild,
+                assignedCount: store.connections.count,
                 onCancel: {
                     if let id = selectedConnection?.id { sessions.cancelConnect(id) }
                 },
@@ -87,11 +89,17 @@ struct ContentView: View {
         .frame(minWidth: Column.minimumWindowWidth, minHeight: 480)
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.sessions = sessions
+            AppDelegate.bringToFront()
             sessions.onLearnedLinkAddress = { id, mac in
                 store.rememberLinkAddress(mac, for: id)
             }
             restoreColumnLayout()
+            sessions.forcesUnlock = store.isManagedBuild
             Task { await SSHSessionManager.sweepAbandonedSessions() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            store.reloadManagedPolicy()
+            sessions.forcesUnlock = store.isManagedBuild
         }
         .onChange(of: columns) { _, layout in saveColumnLayout(layout) }
         .onReceive(NotificationCenter.default.publisher(for: .showWakeyHelp)) { _ in
@@ -167,12 +175,20 @@ struct ContentView: View {
             // Shown instead of the table, not over it, so the striped rows do
             // not run through the text.
             ContentUnavailableView {
-                Label("No saved connections", systemImage: "desktopcomputer")
+                Label(
+                    store.isManagedBuild ? "No assigned machines" : "No saved connections",
+                    systemImage: "desktopcomputer")
             } description: {
-                Text("Add the machines you need to reach, so you do not have to remember "
-                     + "usernames, addresses and ports.")
+                if store.isManagedBuild {
+                    Text("Your organization has not assigned any machines.")
+                } else {
+                    Text("Add the machines you need to reach, so you do not have to remember "
+                         + "usernames, addresses and ports.")
+                }
             } actions: {
-                Button("Add a Connection") { sheet = .add }
+                if !store.isManagedBuild {
+                    Button("Add a Connection") { sheet = .add }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -294,23 +310,33 @@ struct ContentView: View {
             let connections = ids.compactMap { store.connection(with: $0) }
             if connections.count == 1, let connection = connections.first {
                 let id = connection.id
-                Button(sessions.state(for: id).isConnected
-                       ? "Open in Terminal"
-                       : connection.connectMode.buttonTitle) {
+                Button(
+                    store.isManagedBuild
+                        ? ConnectMode.unlock.buttonTitle
+                        : (sessions.state(for: id).isConnected
+                           ? "Open in Terminal"
+                           : connection.connectMode.buttonTitle)
+                ) {
                     activate(connection)
                 }
-                Button("Edit…") { sheet = .edit(connection) }
-                    .disabled(sessions.state(for: id).isConnected
-                              || sessions.state(for: id).isConnecting)
+                if !store.isManagedBuild {
+                    Button("Edit…") { sheet = .edit(connection) }
+                        .disabled(sessions.state(for: id).isConnected
+                                  || sessions.state(for: id).isConnecting)
+                }
                 Button(isRevealed(id) ? "Hide Details" : "Show Details") {
                     toggleReveal(id)
                 }
-                Button("Activity…") { sheet = .activity(connection) }
-                Divider()
-                Button("Remove…", role: .destructive) { removalTargets = [connection] }
-                    .disabled(sessions.state(for: id).isConnected
-                              || sessions.state(for: id).isConnecting)
-            } else if connections.count > 1 {
+                if store.allowsDiagnostics {
+                    Button("Activity…") { sheet = .activity(connection) }
+                }
+                if !store.isManagedBuild {
+                    Divider()
+                    Button("Remove…", role: .destructive) { removalTargets = [connection] }
+                        .disabled(sessions.state(for: id).isConnected
+                                  || sessions.state(for: id).isConnecting)
+                }
+            } else if !store.isManagedBuild, connections.count > 1 {
                 // Multi-select is for batch delete only. Connect and Edit need
                 // one machine; offering them for a set would mean guessing.
                 Button("Remove…", role: .destructive) { removalTargets = connections }
@@ -434,23 +460,25 @@ struct ContentView: View {
 
     private var controls: some View {
         HStack(spacing: 10) {
-            Button("Add") { sheet = .add }
-                .disabled(store.isLocked)
+            if !store.isManagedBuild {
+                Button("Add") { sheet = .add }
+                    .disabled(store.isLocked)
 
-            // Edit only when exactly one row is selected. Remove works for one
-            // or many. Both are absent rather than dimmed when there is nothing
-            // to act on.
-            if let connection = selectedConnection {
-                Button("Edit") { sheet = .edit(connection) }
-                    .disabled(store.isLocked || selectedState.isConnected
-                              || selectedState.isConnecting)
-            }
-
-            if !selectedConnections.isEmpty {
-                Button(selection.count == 1 ? "Remove" : "Remove (\(selection.count))") {
-                    removalTargets = selectedConnections
+                // Edit only when exactly one row is selected. Remove works for one
+                // or many. Both are absent rather than dimmed when there is nothing
+                // to act on.
+                if let connection = selectedConnection {
+                    Button("Edit") { sheet = .edit(connection) }
+                        .disabled(store.isLocked || selectedState.isConnected
+                                  || selectedState.isConnecting)
                 }
-                .disabled(store.isLocked || selectionIsBusy)
+
+                if !selectedConnections.isEmpty {
+                    Button(selection.count == 1 ? "Remove" : "Remove (\(selection.count))") {
+                        removalTargets = selectedConnections
+                    }
+                    .disabled(store.isLocked || selectionIsBusy)
+                }
             }
 
             Button {
@@ -491,24 +519,28 @@ struct ContentView: View {
                 Button("Disconnect") {
                     sessions.disconnect(connection.id)
                 }
-                Button("Open in Terminal") {
-                    sessions.openInTerminal(connection.id)
+                if !store.isManagedBuild {
+                    Button("Open in Terminal") {
+                        sessions.openInTerminal(connection.id)
+                    }
+                    .keyboardShortcut(.defaultAction)
                 }
-                .keyboardShortcut(.defaultAction)
 
             case .idle, .failed, .unlocked:
-                Picker("Connect mode", selection: connectModeBinding) {
-                    ForEach(ConnectMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                if !store.isManagedBuild {
+                    Picker("Connect mode", selection: connectModeBinding) {
+                        ForEach(ConnectMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .fixedSize()
+                    .disabled(store.isLocked)
+                    .help(connection.connectMode.explanation)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .fixedSize()
-                .disabled(store.isLocked)
-                .help(connection.connectMode.explanation)
 
-                Button(connection.connectMode.buttonTitle) {
+                Button(store.isManagedBuild ? ConnectMode.unlock.buttonTitle : connection.connectMode.buttonTitle) {
                     activate(connection)
                 }
                 .keyboardShortcut(.defaultAction)
@@ -546,16 +578,17 @@ struct ContentView: View {
         case .password(let connection):
             PasswordPromptView(
                 connection: connection,
+                allowsModeSwitch: !store.isManagedBuild,
                 onConnect: { entered, mode in
                     sheet = nil
                     var latest = store.connection(with: connection.id) ?? connection
-                    if latest.connectMode != mode {
+                    if !store.isManagedBuild, latest.connectMode != mode {
                         latest.connectMode = mode
                         store.update(latest)
                         latest = store.connection(with: connection.id) ?? latest
                     }
                     sessions.connect(
-                        latest, password: SecureBuffer(entered), mode: mode)
+                        latest, password: SecureBuffer(entered), mode: store.isManagedBuild ? .unlock : mode)
                 },
                 onCancel: { sheet = nil })
 
@@ -589,7 +622,7 @@ struct ContentView: View {
                 onCancel: { sheet = nil })
 
         case .help:
-            HelpSheet(onDismiss: { sheet = nil })
+            HelpSheet(isManagedBuild: store.isManagedBuild, onDismiss: { sheet = nil })
         }
     }
 
@@ -612,6 +645,7 @@ struct ContentView: View {
     private func activate(_ connection: SSHConnection) {
         switch sessions.state(for: connection.id) {
         case .connected:
+            if store.isManagedBuild { break }
             sessions.openInTerminal(connection.id)
         case .connecting:
             break

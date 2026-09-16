@@ -13,6 +13,11 @@ struct StatusPanel: View {
     /// When more than one row is selected, Connect and Edit are off the table and
     /// this panel says so instead of talking about a single machine.
     var selectedCount = 0
+    /// IT catalog: no add/remove copy, Wake-only idle text.
+    var isManagedCatalog = false
+    /// Rows in the current list. Needed so “nothing selected” is not described
+    /// as an empty catalog when IT has assigned machines.
+    var assignedCount = 0
 
     var onCancel: () -> Void
     var onReviewHostKey: () -> Void
@@ -163,8 +168,12 @@ struct StatusPanel: View {
         }
         switch state {
         case .idle:
-            guard connection != nil else { return "Select a connection." }
-            return (connection?.connectMode ?? .unlock).idleHeadline(destination: destination)
+            guard connection != nil else {
+                return Self.unselectedHeadline(
+                    isManagedCatalog: isManagedCatalog, assignedCount: assignedCount)
+            }
+            let mode = isManagedCatalog ? ConnectMode.unlock : (connection?.connectMode ?? .unlock)
+            return mode.idleHeadline(destination: destination)
         case .connecting(let stage):
             return stage
         case .connected:
@@ -180,12 +189,18 @@ struct StatusPanel: View {
 
     private var guidance: String? {
         if isMultiSelect {
-            return "Remove deletes them from this Mac. Wake, Connect and Edit still need one selection."
+            return isManagedCatalog
+                ? "Wake still needs one machine selected."
+                : "Remove deletes them from this Mac. Wake, Connect and Edit still need one selection."
         }
         switch state {
         case .idle:
-            return connection == nil
-                ? "Add a machine, or pick one from the list."
+            if connection == nil {
+                return Self.unselectedGuidance(
+                    isManagedCatalog: isManagedCatalog, assignedCount: assignedCount)
+            }
+            return isManagedCatalog
+                ? ConnectMode.unlock.idleGuidance
                 : (connection?.connectMode ?? .unlock).idleGuidance
         case .connecting(let stage):
             return stage == SSHSessionManager.wakingHeadline
@@ -199,14 +214,21 @@ struct StatusPanel: View {
         case .unlocked(let info):
             var lines: [String] = []
             if info.closedByServer {
-                lines.append("The machine closed the connection straight after accepting the "
+                var text = "The machine closed the connection straight after accepting the "
                     + "password. If it was waiting at the FileVault screen, that is exactly what "
-                    + "waking it looks like: it is starting up now. Give it a minute, then choose "
-                    + "Open a session if you want a shell.")
+                    + "waking it looks like: it is starting up now."
+                if !isManagedCatalog {
+                    text += " Give it a minute, then choose Open a session if you want a shell."
+                }
+                lines.append(text)
             } else {
-                lines.append("That is all Wake does. The password was accepted and nothing "
+                var text = "That is all Wake does. The password was accepted and nothing "
                     + "was left open. If that Mac was waiting at the FileVault screen it is "
-                    + "starting up now. Choose Open a session if you want a shell.")
+                    + "starting up now."
+                if !isManagedCatalog {
+                    text += " Choose Open a session if you want a shell."
+                }
+                lines.append(text)
             }
             if !info.usedPassword {
                 lines.append("An SSH key was accepted, so the password you typed was never used "
@@ -216,5 +238,23 @@ struct StatusPanel: View {
         case .failed(let failure):
             return failure.guidance
         }
+    }
+
+    /// Idle copy when no row is selected. The empty-catalog sentence belongs
+    /// only to an empty list, not to “nothing highlighted yet.”
+    static func unselectedHeadline(isManagedCatalog: Bool, assignedCount: Int) -> String {
+        if isManagedCatalog {
+            return assignedCount == 0
+                ? "Your organization has not assigned any machines."
+                : "Select a machine."
+        }
+        return "Select a connection."
+    }
+
+    static func unselectedGuidance(isManagedCatalog: Bool, assignedCount: Int) -> String? {
+        if isManagedCatalog {
+            return assignedCount == 0 ? nil : "Pick one from the list to wake it."
+        }
+        return "Add a machine, or pick one from the list."
     }
 }

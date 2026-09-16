@@ -1,11 +1,20 @@
 # SSH-Wakey
 
-A small native macOS app that keeps a list of SSH destinations and opens a shell
-on one of them, so you do not have to remember usernames, addresses and ports
-when you need to get back into a machine.
+A small native macOS app that keeps a list of SSH destinations so you do not
+have to remember usernames, addresses and ports when you need to get back into
+a machine.
 
-It is a launcher, not a terminal. It authenticates once, holds the connection
-open, and hands the session to Terminal.
+It is a launcher, not a terminal. The password is typed once per attempt, used
+once, and thrown away.
+
+**Standard** (`com.CadenGithubB.sshwakey`) is the public app. You add machines,
+choose Wake or Open a session per host, and can encrypt the saved list. It
+never reads a configuration profile.
+
+**Managed** (`com.CadenGithubB.sshwakey.managed`) is the IT copy. Jamf assigns
+the list. Wake only: no add, edit, remove, export, or Terminal. The employee
+still types the office Mac password; nothing in the profile is a secret.
+Notes and the schema are in [docs/jamf/README.md](docs/jamf/README.md).
 
 - Swift and SwiftUI, macOS 14 or later
 - No third-party dependencies at all
@@ -23,7 +32,10 @@ In Xcode:
 open SSH-Wakey.xcodeproj
 ```
 
-Then press ⌘R to run, or ⌘U to run the tests.
+Then press ⌘R to run, or ⌘U to run the tests. In Xcode the scheme menu is
+**SSH-Wakey** (Standard) or **SSH-Wakey Managed** (IT). One project, two
+schemes, the same sources. A compile flag in the Managed scheme is what locks
+that binary; it is not a second repo.
 
 From the command line:
 
@@ -70,18 +82,49 @@ not stop it opening. Gatekeeper only assesses an app that arrived with a
 quarantine flag, which is attached to downloads and AirDrops. An app you built
 and copied locally has no such flag, so it is never assessed.
 
+### Managed copy for Jamf
+
+The Standard app never reads a configuration profile. A work VPN or Mail profile
+on a personal Mac cannot take over someone’s home copy.
+
+The **SSH-Wakey Managed** scheme (`com.CadenGithubB.sshwakey.managed`) is the IT
+build: Wake only, list from a forced Jamf payload, no add/edit/export. The
+catalog is the live profile, not a copy into `connections.json`. Learned
+Ethernet addresses for Wake are kept in a small local cache. Notes and the
+schema are in [docs/jamf/README.md](docs/jamf/README.md).
+
+```
+xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configuration ManagedRelease build
+```
+
+```bash
+./Scripts/make-dmg.sh
+./Scripts/make-dmg-managed.sh
+```
+
+The first writes `build/SSH-Wakey.dmg`. The second writes
+`build/SSH-Wakey-Managed.dmg`.
+
 ### Moving it to another Mac
 
 ```bash
 ./Scripts/make-dmg.sh
 ```
 
-Writes `build/SSH-Wakey.dmg`. Be aware of what that means, though: the app is
-signed ad-hoc and is not notarised, so on any Mac that did not build it the
-quarantine flag will be there and Gatekeeper will refuse it outright. Getting
-past that means right-clicking and choosing Open, or stripping the flag by hand,
-and teaching people to do either is a bad habit. If you want to hand this to
-someone else, sign it with a Developer ID and notarise it first.
+Writes `build/SSH-Wakey.dmg`. For the IT copy:
+
+```bash
+./Scripts/make-dmg-managed.sh
+```
+
+Writes `build/SSH-Wakey-Managed.dmg`. Be aware of what that means, though: both
+apps are signed ad-hoc and are not notarised, so on any Mac that did not build
+them the quarantine flag will be there and Gatekeeper will refuse them
+outright. Getting past that means right-clicking and choosing Open, or
+stripping the flag by hand, and teaching people to do either is a bad habit. If
+you want to hand this to someone else, sign it with a Developer ID and notarise
+it first. A Jamf policy that installs the Managed app as root usually avoids
+that prompt; Self Service downloads of an ad-hoc signed app still get it.
 
 ---
 
@@ -94,6 +137,9 @@ someone else, sign it with a Developer ID and notarise it first.
 3. Press **Wake** (the default) or **Connect**, or double-click the row.
 4. Type the password in the sheet that appears. The sheet shows the destination
    and the mode, so you can still change the mode without cancelling.
+
+The rest of this section is Standard. The Managed copy has no Add, Edit, or
+Open a session: select an assigned machine and press Wake.
 
 ### The two things the button can do
 
@@ -203,7 +249,7 @@ master goes away, taking attached Terminal windows with it.
 
 ## Saved connections
 
-Metadata only, in:
+Standard keeps metadata only in:
 
 ```
 ~/Library/Application Support/SSH-Wakey/connections.json
@@ -246,6 +292,11 @@ earlier build has no dates, and the app shows a dash rather than inventing one.
 The folder is created `0700` and the file is written `0600`, so only your account
 can read it. Writes are atomic, and permissions are reapplied after every save
 because an atomic write replaces the file.
+
+The Managed build does not use this file. Its list is the forced Jamf payload,
+read live. The only thing it may write is
+`~/Library/Application Support/SSH-Wakey Managed/link-addresses.json`, a host →
+MAC cache for Wake, still `0600` and still not a password.
 
 There is no password field, and there never will be. You can edit the file by
 hand while the app is closed; anything invalid is caught by the same validation
@@ -467,6 +518,10 @@ off. When a connection to a local address fails that way, SSH-Wakey says so and
 offers a button straight to System Settings ▸ Privacy & Security ▸ Local
 Network. If you have just granted it, connect again.
 
+IT cannot flip this toggle with Jamf. Apple does not allow MDM to set Local
+Network privacy. A Developer ID–signed Managed build is what makes one Allow
+stick; ad-hoc rebuilds can prompt again.
+
 Addresses treated as local: `10.x`, `172.16–31.x`, `192.168.x`, `169.254.x`,
 `127.x`, IPv6 loopback, link-local and unique-local, any `.local` name, and any
 bare name with no dots.
@@ -494,6 +549,9 @@ SSH-Wakey/
     ConnectionVault.swift      The encrypted file: one data key, two key slots
     KeychainKeyStore.swift     The everyday key, in the login keychain
   Models/
+    AppDistribution.swift      Standard vs Managed compile flag
+    ManagedPolicy.swift        Forced Jamf payload (Managed build only)
+    LinkAddressCache.swift     Learned MACs for Wake
     SSHConnection.swift        Saved metadata, Codable
     ConnectionFileStore.swift  Atomic JSON load and save with tight permissions
     ConnectionStore.swift      Observable list the window binds to
@@ -513,15 +571,15 @@ SSH-Wakey/
     ProcessRunner.swift     Small async wrapper around Process
     DiagnosticsReport.swift Recent attempts, also written by Save Diagnostics
   Views/                    SwiftUI window, editor, password prompt, activity, host key sheet
-SSH-WakeyTests/             236 tests
+SSH-WakeyTests/             254 tests
 ```
 
 ## Tests
 
-236 unit tests covering persistence and its file permissions, timestamps, change
+254 unit tests covering persistence and its file permissions, timestamps, change
 history, the encrypted file and both ways into it, appending to known_hosts, which columns may be hidden and how the table
 layout is saved, field and argument validation, command construction, wake packets
-and MAC parsing, failure
+and MAC parsing, managed-catalog overlays, failure
 classification against real OpenSSH diagnostics, local address detection, the
 password buffer, the Terminal handoff script, and the password channel itself. The channel tests run the real client code against the real
 server code in process, including the cases where it must refuse: a bad token, a

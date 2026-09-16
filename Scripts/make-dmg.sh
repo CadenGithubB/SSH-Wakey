@@ -1,6 +1,11 @@
 #!/bin/sh
 #
-# Builds a disk image for moving SSH-Wakey to another Mac.
+# Builds a disk image for the public Standard app.
+#
+# Writes build/SSH-Wakey.dmg
+#
+# The IT copy is a different scheme in this same project:
+#   ./Scripts/make-dmg-managed.sh
 #
 # Read this before using it on someone else's machine: the app is signed
 # ad-hoc, not with a Developer ID, and it is not notarised. On the Mac that

@@ -25,7 +25,37 @@ enum HelpNotes {
     placed in a command line, and never kept after the attempt finishes.
     """
 
-    static let topics: [HelpTopic] = [
+    static func topics(isManagedBuild: Bool) -> [HelpTopic] {
+        if !isManagedBuild { return standardTopics }
+        let extras = standardTopics.filter {
+            ["lock.display", "network", "powerplug"].contains($0.icon)
+        }
+        return managedTopics + extras
+    }
+
+    private static let managedTopics: [HelpTopic] = [
+        HelpTopic(
+            icon: "building.2",
+            title: "This copy is managed by your organization",
+            body: """
+            The machines in the list were assigned by IT. You cannot add, edit, remove or export \
+            them. Wake logs in just long enough to wake a Mac, then disconnects. This copy will \
+            not open a session or a Terminal window.
+
+            The password you type on Wake is for that office Mac. It is not stored, and it is not \
+            sent in the configuration profile.
+            """),
+        HelpTopic(
+            icon: "lock.shield",
+            title: "Your password is used once and then thrown away",
+            body: """
+            What you type goes straight to ssh through a channel that works exactly once. It is \
+            never written to disk, never placed on a command line, and nothing keeps it after the \
+            attempt ends.
+            """),
+    ]
+
+    private static let standardTopics: [HelpTopic] = [
         HelpTopic(
             icon: "list.bullet.rectangle",
             title: "It remembers the connection details so you do not have to",
@@ -202,7 +232,10 @@ enum HelpNotes {
 
 /// The "What SSH-Wakey does" sheet.
 struct HelpSheet: View {
+    var isManagedBuild = false
     var onDismiss: () -> Void
+
+    private var topics: [HelpTopic] { HelpNotes.topics(isManagedBuild: isManagedBuild) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -222,7 +255,7 @@ struct HelpSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    ForEach(Array(HelpNotes.topics.enumerated()), id: \.element.id) { index, topic in
+                    ForEach(Array(topics.enumerated()), id: \.element.id) { index, topic in
                         VStack(alignment: .leading, spacing: 10) {
                             Label {
                                 Text(topic.title)
@@ -259,7 +292,7 @@ struct HelpSheet: View {
                             }
                         }
 
-                        if index < HelpNotes.topics.count - 1 { Divider() }
+                        if index < topics.count - 1 { Divider() }
                     }
                 }
                 .padding(20)

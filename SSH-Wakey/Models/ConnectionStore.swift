@@ -21,9 +21,17 @@ final class ConnectionStore {
     private(set) var storageError: String?
     private(set) var access: Access = .open
     private(set) var isEncrypted = false
+    /// True for the IT binary. The Standard build never sets this.
+    private(set) var isManagedBuild: Bool
+    /// Forced `OrganizationName`, if IT supplied one.
+    private(set) var organizationName: String?
+    /// Save Diagnostics / Activity. Forced off only when IT says so.
+    private(set) var allowsDiagnostics = true
 
     private let fileStore: ConnectionFileStore
     private let keychainAccount: String
+    private let preferences: any ManagedPreferenceReading
+    private let linkCache: LinkAddressCache
     /// Non-nil only when encryption is on and the file has been opened.
     private var dataKey: SymmetricKey?
     private var vault: ConnectionVault?
@@ -33,10 +41,16 @@ final class ConnectionStore {
 
     init(
         fileStore: ConnectionFileStore = ConnectionFileStore(),
-        keychainAccount: String = KeychainKeyStore.defaultAccount
+        keychainAccount: String = KeychainKeyStore.defaultAccount,
+        isManagedBuild: Bool = AppDistribution.isManagedBuild,
+        preferences: any ManagedPreferenceReading = SystemManagedPreferences(),
+        linkCache: LinkAddressCache? = nil
     ) {
         self.fileStore = fileStore
         self.keychainAccount = keychainAccount
+        self.isManagedBuild = isManagedBuild
+        self.preferences = preferences
+        self.linkCache = linkCache ?? LinkAddressCache(directoryURL: fileStore.directoryURL)
         load()
     }
 
@@ -59,6 +73,10 @@ final class ConnectionStore {
     }
 
     func load() {
+        if isManagedBuild {
+            applyManagedCatalog()
+            return
+        }
         do {
             switch try fileStore.read() {
             case .empty:
@@ -115,10 +133,34 @@ final class ConnectionStore {
         self.access = (encrypted && dataKey == nil) ? .locked : .open
     }
 
+    /// Re-reads a Jamf profile without touching the personal connections file.
+    func reloadManagedPolicy() {
+        guard isManagedBuild else { return }
+        applyManagedCatalog()
+    }
+
+    private func applyManagedCatalog() {
+        let policy = ManagedPolicy.load(from: preferences, acceptsManagedPreferences: true)
+        organizationName = policy.organizationName
+        allowsDiagnostics = policy.allowsDiagnostics
+        connections = policy.connections.map { row in
+            var copy = row
+            if copy.hardwareAddress == nil {
+                copy.hardwareAddress = linkCache.address(for: copy.host)
+            }
+            return copy
+        }
+        vault = nil
+        dataKey = nil
+        isEncrypted = false
+        access = .open
+        storageError = nil
+    }
+
     // MARK: - Editing
 
     func add(_ connection: SSHConnection) {
-        guard access == .open else { return }
+        guard access == .open, !isManagedBuild else { return }
         var added = connection.normalized
         let now = Date.stamp()
         added.createdAt = now
@@ -130,7 +172,7 @@ final class ConnectionStore {
 
     /// Keeps the original creation date, and records what changed.
     func update(_ connection: SSHConnection) {
-        guard access == .open,
+        guard access == .open, !isManagedBuild,
               let index = connections.firstIndex(where: { $0.id == connection.id }) else { return }
         let previous = connections[index]
 
@@ -164,6 +206,11 @@ final class ConnectionStore {
         guard var connection = connection(with: id),
               let mac = NetworkWake.MACAddress(parsing: address) else { return }
         let stored = mac.colonSeparated
+        linkCache.store(stored, for: connection.host)
+        if isManagedBuild {
+            applyManagedCatalog()
+            return
+        }
         guard connection.hardwareAddress != stored else { return }
         connection.hardwareAddress = stored
         update(connection)
@@ -175,7 +222,7 @@ final class ConnectionStore {
 
     /// Drops several connections in one save, for the multi-select Remove.
     func remove(ids: Set<SSHConnection.ID>) {
-        guard access == .open, !ids.isEmpty else { return }
+        guard access == .open, !isManagedBuild, !ids.isEmpty else { return }
         connections.removeAll { ids.contains($0.id) }
         sortAndSave()
     }
@@ -207,7 +254,7 @@ final class ConnectionStore {
     /// Encrypts the file. The data key is wrapped twice: once with a new key
     /// kept in the Keychain, and once with this passphrase.
     func enableEncryption(passphrase: String) throws {
-        guard !isEncrypted, access == .open else { return }
+        guard !isManagedBuild, !isEncrypted, access == .open else { return }
 
         let dataKey = VaultCrypto.makeDataKey()
         let keychainKey = KeychainKeyStore.makeKey()
@@ -230,7 +277,7 @@ final class ConnectionStore {
     /// let a moment at an unlocked app quietly downgrade the file to plain text
     /// and leave it that way without the owner noticing.
     func disableEncryption(passphrase: String) throws {
-        guard isEncrypted, access == .open, let sealed = vault else { return }
+        guard !isManagedBuild, isEncrypted, access == .open, let sealed = vault else { return }
 
         // Throws .wrongPassphrase if it does not open the recovery slot.
         _ = try VaultCrypto.dataKey(from: sealed, passphrase: passphrase)
@@ -247,7 +294,7 @@ final class ConnectionStore {
     /// Opens a locked file with the recovery passphrase, then puts a fresh key
     /// in the Keychain so the next launch is silent again.
     func unlock(withPassphrase passphrase: String) throws {
-        guard let stored = vault else { return }
+        guard !isManagedBuild, let stored = vault else { return }
 
         let key = try VaultCrypto.dataKey(from: stored, passphrase: passphrase)
         let saved = try VaultCrypto.connections(in: stored, using: key)
@@ -272,7 +319,7 @@ final class ConnectionStore {
     /// The contents are not re-encrypted. Only the wrapping of the data key
     /// changes.
     func changePassphrase(from current: String, to replacement: String) throws {
-        guard let vault, dataKey != nil else { return }
+        guard !isManagedBuild, let vault, dataKey != nil else { return }
 
         // Throws .wrongPassphrase if it does not open the recovery slot.
         let verified = try VaultCrypto.dataKey(from: vault, passphrase: current)
@@ -291,6 +338,7 @@ final class ConnectionStore {
     /// ending up with one. The passphrase is verified immediately before the
     /// write, so it is held for as short a time as possible.
     func export(to url: URL, passphrase: String? = nil) throws {
+        guard !isManagedBuild else { throw ConnectionFileStore.StoreError.encrypted }
         guard access == .open else { throw ConnectionFileStore.StoreError.encrypted }
 
         if let vault {
