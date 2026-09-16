@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/app-icon.png" width="128" height="128" alt="SSH-Wakey">
+</p>
+
 # SSH-Wakey
 
 A small native macOS app that keeps a list of SSH destinations so you do not
