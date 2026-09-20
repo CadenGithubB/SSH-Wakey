@@ -68,3 +68,10 @@ verify_release_bundle() {
     verify_signed_component "$adapter_bundle" "$main_identifier.askpass" "SSH-Wakey Askpass" adapter
     verify_signed_component "$input_bundle" "$main_identifier.askpass.password-input" PasswordInput sandbox
 }
+
+# Only use on a disposable staged copy. Certificate-signed inputs are refused.
+prepare_release_bundle() (
+    verify_release_bundle "$@"
+    /usr/bin/python3 Scripts/release-privacy.py --prepare "$1"
+    verify_release_bundle "$@"
+)

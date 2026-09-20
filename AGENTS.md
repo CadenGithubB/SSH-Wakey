@@ -16,3 +16,5 @@
   before every commit and push. Ignore rules do not protect already tracked files.
 - Preserve the project's established public GitHub/no-reply commit identity;
   never let Git substitute a local OS account or machine hostname.
+- Apply the same privacy review to release assets. Check staged app bundles and
+  archive contents, and upload only the explicitly verified assets.

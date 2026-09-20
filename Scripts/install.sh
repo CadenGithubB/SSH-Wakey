@@ -42,8 +42,8 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
-/usr/bin/ditto "$BUILT" "$STAGE/SSH-Wakey.app"
-verify_release_bundle "$STAGE/SSH-Wakey.app" "$BUNDLE_ID" SSH-Wakey
+/usr/bin/ditto --noextattr --noacl --norsrc "$BUILT" "$STAGE/SSH-Wakey.app"
+prepare_release_bundle "$STAGE/SSH-Wakey.app" "$BUNDLE_ID" SSH-Wakey
 check_installed_identity
 if [ -d "$DESTINATION" ]; then
     /bin/mv "$DESTINATION" "$BACKUP"

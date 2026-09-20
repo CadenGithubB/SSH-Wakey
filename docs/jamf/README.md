@@ -20,7 +20,7 @@ xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configurati
 ```
 
 The product is `SSH-Wakey Managed.app`. Package that for a Jamf policy, or take
-`SSH-Wakey-Managed.dmg` from a GitHub release (`./Scripts/make-dmg-managed.sh`
+`SSH-Wakey-Managed.zip` from a GitHub release (`./Scripts/make-zip-managed.sh`
 builds it). A policy install as root usually avoids Gatekeeper. Self Service
 downloads of an ad-hoc signed app still get a quarantine warning; Developer ID
 and notarisation are a later step, not part of this payload.

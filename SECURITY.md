@@ -266,6 +266,16 @@ not be treated as equivalent protection. The install/package scripts verify the
 signature, runtime flag and entitlements of all three executables before accepting a build; a failed
 verification stops them.
 
+Release ZIP entries contain explicit file bytes and fixed permissions/timestamps,
+without extended attributes or ACLs. Legacy local DMGs can retain macOS
+provenance and are not used as release assets. The ad-hoc packaging path
+strips debug symbols containing local source paths and removes optional
+build-machine/toolchain keys from Info.plist. It then re-signs the password
+service, adapter, and app in that order and repeats the security checks. A
+privacy check rejects local user/temporary paths and diagnostic artifacts in
+the staged app. Certificate-signed inputs are refused instead of silently
+replacing their signatures with ad-hoc signatures.
+
 The main app and metadata-only adapter remain unsandboxed; the password-entry
 service is sandboxed. Local builds are currently ad-hoc signed. Rebuilds change its designated
 requirement and can require new Keychain permission. Developer ID signing and

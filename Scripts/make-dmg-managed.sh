@@ -20,11 +20,11 @@ trap '/bin/rm -rf "$WORK"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 /bin/mkdir "$WORK/staging"
-/usr/bin/ditto "$BUILT" "$WORK/staging/SSH-Wakey Managed.app"
-verify_release_bundle "$WORK/staging/SSH-Wakey Managed.app" com.CadenGithubB.sshwakey.managed 'SSH-Wakey Managed'
+/usr/bin/ditto --noextattr --noacl --norsrc "$BUILT" "$WORK/staging/SSH-Wakey Managed.app"
+prepare_release_bundle "$WORK/staging/SSH-Wakey Managed.app" com.CadenGithubB.sshwakey.managed 'SSH-Wakey Managed'
 /bin/ln -s /Applications "$WORK/staging/Applications"
 /usr/bin/hdiutil create -volname 'SSH-Wakey Managed' -srcfolder "$WORK/staging" \
-    -format UDZO "$WORK/image.dmg" >/dev/null
+    -format UDZO -fs HFS+ -nospotlight "$WORK/image.dmg" >/dev/null
 [ ! -L build/SSH-Wakey-Managed.dmg ] || fail 'Refusing linked disk image destination.'
 /bin/mv -f "$WORK/image.dmg" build/SSH-Wakey-Managed.dmg
 echo 'Wrote build/SSH-Wakey-Managed.dmg (ad-hoc signed, not notarized).'

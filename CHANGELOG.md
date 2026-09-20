@@ -12,7 +12,8 @@
   askpass adapter exchange authorization metadata and file descriptors only;
   the service writes the password directly to SSH and exits after one attempt.
 - Release packaging checks for all three signed components, Hardened Runtime,
-  and the password service's exact sandbox entitlement set.
+  and the password service's exact sandbox entitlement set. Release ZIP archives omit
+  local source paths, build-machine metadata, extended attributes, and ACLs.
 
 ### Hardened
 

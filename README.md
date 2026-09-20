@@ -104,26 +104,35 @@ xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configurati
 ```
 
 ```bash
-./Scripts/make-dmg.sh
-./Scripts/make-dmg-managed.sh
+./Scripts/make-zip.sh
+./Scripts/make-zip-managed.sh
 ```
 
-The first writes `build/SSH-Wakey.dmg`. The second writes
-`build/SSH-Wakey-Managed.dmg`.
+The first writes `build/SSH-Wakey.zip`. The second writes
+`build/SSH-Wakey-Managed.zip`.
 
 ### Moving it to another Mac
 
 ```bash
-./Scripts/make-dmg.sh
+./Scripts/make-zip.sh
 ```
 
-Writes `build/SSH-Wakey.dmg`. For the IT copy:
+Writes `build/SSH-Wakey.zip`. For the IT copy:
 
 ```bash
-./Scripts/make-dmg-managed.sh
+./Scripts/make-zip-managed.sh
 ```
 
-Writes `build/SSH-Wakey-Managed.dmg`. These scripts currently produce local
+Writes `build/SSH-Wakey-Managed.zip`. Packaging strips local source paths and
+optional build-machine metadata from staged copies, omits extended attributes
+and ACLs from ZIP entries, and re-signs all three components before checking
+signatures and sandbox entitlements. Unzip the download and move the app to
+Applications. ZIP entries use fixed timestamps and permissions rather than
+copying local filesystem metadata. The legacy DMG scripts are for local use;
+disk images can retain macOS provenance metadata. Certificate-signed inputs are refused by this ad-hoc
+packaging path.
+
+These scripts currently produce local
 ad-hoc-signed verification builds, not notarised distribution artifacts. Before
 sharing either app, sign all components with Developer ID, notarise the result,
 and test installation and password entry on the supported target systems.
