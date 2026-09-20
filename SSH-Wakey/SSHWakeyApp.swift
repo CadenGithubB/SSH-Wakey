@@ -10,28 +10,47 @@ struct SSHWakeyApp: App {
 
     // Owned here rather than in the window, because the Settings scene works on
     // the same store.
-    @State private var store = ConnectionStore.forCurrentEnvironment()
-    @State private var sessions = SSHSessionManager()
+    @State private var store: ConnectionStore
+    @State private var sessions: SSHSessionManager
+    @State private var security: AppSecurityCoordinator
+
+    init() {
+        let store = ConnectionStore.forCurrentEnvironment()
+        let sessions = SSHSessionManager()
+        _store = State(initialValue: store)
+        _sessions = State(initialValue: sessions)
+        _security = State(initialValue: AppSecurityCoordinator(store: store, sessions: sessions))
+    }
 
     var body: some Scene {
         Window(AppDistribution.windowTitle, id: "main") {
-            ContentView(store: store, sessions: sessions)
+            ContentView(store: store, sessions: sessions, security: security)
+                .onAppear { security.start() }
+                .onChange(of: store.access) { _, _ in security.refresh() }
+                .onChange(of: store.isAppLockEnabled) { _, _ in security.refresh() }
+                .onChange(of: store.isAuthenticating) { _, _ in security.refresh() }
         }
         .defaultSize(width: Column.minimumWindowWidth + 120, height: 600)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(after: .appSettings) {
+                Button("Lock SSH-Wakey", action: security.lockNow)
+                    .keyboardShortcut("l", modifiers: [.command, .shift])
+                    .disabled(!store.isAppLockEnabled || store.isLocked)
+            }
             CommandGroup(replacing: .help) {
                 Button("What SSH-Wakey Does") {
                     NotificationCenter.default.post(name: .showWakeyHelp, object: nil)
                 }
                 Divider()
                 Button("Save Diagnostics…", action: saveDiagnostics)
-                    .disabled(sessions.diagnostics.isEmpty || !store.allowsDiagnostics)
+                    .disabled(sessions.diagnostics.isEmpty || !store.allowsDiagnostics
+                              || store.access != .open || store.isAuthenticating)
             }
         }
 
         Settings {
-            SecuritySettingsView(store: store)
+            SecuritySettingsView(store: store, security: security)
         }
     }
 }
@@ -49,16 +68,16 @@ extension SSHWakeyApp {
     /// The default Help item opens a help book this app does not have, so the
     /// whole group is replaced rather than added to.
     private func saveDiagnostics() {
-        guard store.allowsDiagnostics else { return }
+        guard store.allowsDiagnostics, security.authorizeCurrentAccess() else { return }
         let panel = NSSavePanel()
         panel.title = "Save Diagnostics"
         panel.nameFieldStringValue = DiagnosticsReport.suggestedFileName()
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true
-        panel.message = "Hostnames, usernames and key fingerprints are in this file. "
-            + "No passwords are."
+        panel.message = "This file includes destination metadata and curated connection results."
 
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url,
+              security.authorizeCurrentAccess() else { return }
 
         let text = DiagnosticsReport.text(
             entries: sessions.diagnostics,
@@ -113,12 +132,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        sessions?.disconnectAll()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let sessions, sessions.activeSessionCount > 0 else { return .terminateNow }
+        guard let sessions else { return .terminateNow }
+        guard sessions.activeSessionCount > 0 else {
+            sessions.disconnectAll()
+            return .terminateNow
+        }
 
         let count = sessions.activeSessionCount
         let alert = NSAlert()

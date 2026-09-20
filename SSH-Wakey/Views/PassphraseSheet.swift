@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Sets, changes or asks for the recovery passphrase.
+@MainActor
 struct PassphraseSheet: View {
 
     enum Purpose {
@@ -14,6 +15,10 @@ struct PassphraseSheet: View {
         case disable
         /// Writing a plain text copy somewhere else.
         case export(URL)
+        /// Migrates the local wrapping key to require system authentication.
+        case enableAppLock
+        /// Removes system authentication while retaining vault encryption.
+        case disableAppLock
 
         var title: String {
             switch self {
@@ -22,6 +27,8 @@ struct PassphraseSheet: View {
             case .unlock: return "Enter your recovery passphrase"
             case .disable: return "Turn off encryption"
             case .export: return "Export a readable copy"
+            case .enableAppLock: return "Turn on App Lock"
+            case .disableAppLock: return "Turn off App Lock"
             }
         }
 
@@ -32,13 +39,14 @@ struct PassphraseSheet: View {
             case .unlock: return "Unlock"
             case .disable: return "Turn Off"
             case .export: return "Export"
+            case .enableAppLock, .disableAppLock: return "Continue"
             }
         }
 
         var wantsConfirmation: Bool {
             switch self {
             case .create, .change: return true
-            case .unlock, .disable, .export: return false
+            case .unlock, .disable, .export, .enableAppLock, .disableAppLock: return false
             }
         }
 
@@ -53,20 +61,35 @@ struct PassphraseSheet: View {
             switch self {
             case .create, .change:
                 return """
-                Your connections are normally opened with a key kept in your Keychain, without \
-                asking you for anything. This passphrase is the other way in, for when that key is \
-                gone: a Keychain reset, a new Mac, or an item deleted by hand.
+                This passphrase is another way to open your encrypted connections if the local \
+                key is unavailable, such as after a Keychain reset or a move to another Mac. \
+                If App Lock is on, it also lets you recover access without the normal unlock method.
 
                 Put it in your password manager. It is not meant to be memorised, and there is no \
                 way to recover it.
                 """
             case .unlock:
                 return """
-                The key in your Keychain is missing or no longer fits, so your connections could \
-                not be opened automatically. The recovery passphrase you set when you turned \
-                encryption on will open them.
+                Your recovery passphrase is the other way to open your encrypted connections, \
+                even if the local key is missing or you cannot use the normal unlock method.
 
-                Once it does, a fresh Keychain key is stored so this does not happen again.
+                If App Lock is on, recovery keeps it on. The app will still lock after five \
+                minutes without activity.
+                """
+            case .enableAppLock:
+                return """
+                Confirm your recovery passphrase before changing how this vault opens. macOS \
+                will then ask you to authenticate with Touch ID or your Mac login password.
+
+                SSH-Wakey will lock after five minutes without activity, and when your Mac \
+                locks, sleeps or switches users. Locking disconnects all SSH sessions, including \
+                any Terminal windows using them. Remote Mac passwords are still entered separately.
+                """
+            case .disableAppLock:
+                return """
+                Enter your recovery passphrase to turn off App Lock. Your connection file stays \
+                encrypted, but the app will open it without asking for Touch ID or your Mac \
+                login password. Automatic locking and its session disconnections will stop.
                 """
             case .export(let url):
                 return """
@@ -80,8 +103,8 @@ struct PassphraseSheet: View {
             case .disable:
                 return """
                 The file will be rewritten in plain text and the Keychain key removed. Only your \
-                account will be able to read it, and FileVault still covers it while this Mac is \
-                off or locked.
+                account will be able to read it, and FileVault protects the volume at rest; screen locking \
+                does not remove the running account's access.
 
                 Your passphrase confirms it is you. Without that, a moment at an unlocked Mac \
                 would be enough to quietly turn this off and leave the file readable.
@@ -105,15 +128,13 @@ struct PassphraseSheet: View {
     var onSubmit: (Entry) throws -> Void
     var onCancel: () -> Void
 
-    @State private var current = ""
-    @State private var passphrase = ""
-    @State private var isRevealed = false
+    // SwiftUI retains references to native fields, never their plaintext value.
+    // Native AppKit storage and the scoped submission bridge cannot be promised
+    // to be explicitly erasable. No ordinary TextField/reveal/undo path is used.
+    @State private var fields = RecoveryFields()
     @State private var copied = false
-    @State private var confirmation = ""
     @State private var problem: String?
-    private enum Field: Hashable { case current, new }
-
-    @FocusState private var focused: Field?
+    @State private var inputProtected = false
 
     private static func icon(for purpose: Purpose) -> String {
         switch purpose {
@@ -121,13 +142,8 @@ struct PassphraseSheet: View {
         case .unlock: return "lock.rotation"
         case .disable: return "lock.open"
         case .export: return "square.and.arrow.up"
+        case .enableAppLock, .disableAppLock: return "lock.shield"
         }
-    }
-
-    private var isComplete: Bool {
-        guard !passphrase.isEmpty else { return false }
-        if purpose.wantsCurrent && current.isEmpty { return false }
-        return purpose.wantsConfirmation ? !confirmation.isEmpty : true
     }
 
     var body: some View {
@@ -146,44 +162,20 @@ struct PassphraseSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if purpose.wantsCurrent {
-                    SecureField("Current passphrase", text: $current)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($focused, equals: .current)
-                        .onSubmit(submit)
+                    NativeRecoveryField(field: fields.current, placeholder: "Current passphrase",
+                                        focusInitially: true, onSubmit: submit)
+                        .frame(height: 24)
                 }
 
-                HStack(spacing: 6) {
-                    if isRevealed {
-                        TextField("New passphrase", text: $passphrase)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(size: 12, design: .monospaced))
-                            .focused($focused, equals: .new)
-                            .onSubmit(submit)
-                    } else {
-                        SecureField(
-                            purpose.wantsConfirmation ? "New passphrase" : "Recovery passphrase",
-                            text: $passphrase)
-                            .textFieldStyle(.roundedBorder)
-                            .focused($focused, equals: .new)
-                            .onSubmit(submit)
-                    }
-
-                    if purpose.wantsConfirmation {
-                        Button {
-                            isRevealed.toggle()
-                        } label: {
-                            Image(systemName: isRevealed ? "eye.slash" : "eye")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(isRevealed ? "Hide it" : "Show it, so you can check what you copied")
-                    }
-                }
+                NativeRecoveryField(field: fields.passphrase,
+                                    placeholder: purpose.wantsConfirmation ? "New passphrase" : "Recovery passphrase",
+                                    focusInitially: !purpose.wantsCurrent, onSubmit: submit)
+                    .frame(height: 24)
 
                 if purpose.wantsConfirmation {
-                    SecureField("Repeat it", text: $confirmation)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit(submit)
+                    NativeRecoveryField(field: fields.confirmation, placeholder: "Repeat it",
+                                        focusInitially: false, onSubmit: submit)
+                        .frame(height: 24)
 
                     Text("At least \(VaultCrypto.minimumPassphraseLength) characters.")
                         .font(.caption)
@@ -194,7 +186,7 @@ struct PassphraseSheet: View {
                     HStack(spacing: 8) {
                         Button("Generate", action: generate)
                         Button(copied ? "Copied" : "Copy", action: copy)
-                            .disabled(passphrase.isEmpty)
+                            .disabled(!inputProtected)
                         Button("Open Passwords") {
                             NSWorkspace.shared.open(
                                 URL(fileURLWithPath: "/System/Applications/Passwords.app"))
@@ -204,9 +196,9 @@ struct PassphraseSheet: View {
                     .controlSize(.small)
 
                     Text("""
-                    macOS does not let an app write into the Passwords app, so copy it and add it \
-                    there yourself as a new entry. The clipboard is cleared again after a minute \
-                    and a half.
+                    SSH-Wakey does not save this in Passwords. Copy it and add it there yourself \
+                    as a new entry. The clipboard is limited to this Mac and cleared again after \
+                    a minute and a half if nothing else has replaced it.
                     """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -227,69 +219,208 @@ struct PassphraseSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") {
-                    current = ""
-                    passphrase = ""
-                    confirmation = ""
+                    fields.invalidate()
                     onCancel()
                 }
                 .keyboardShortcut(.cancelAction)
 
                 Button(purpose.actionTitle, action: submit)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!isComplete)
+                    .disabled(!inputProtected)
             }
             .padding(16)
         }
         .frame(width: 460)
-        .onAppear { focused = purpose.wantsCurrent ? .current : .new }
+        .onAppear(perform: activateInput)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            activateInput()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            fields.secureInput.release()
+            fields.setEnabled(false)
+            inputProtected = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in
+            fields.invalidate()
+            inputProtected = false
+            onCancel()
+        }
+        .onDisappear {
+            fields.invalidate()
+        }
+    }
+
+    private func activateInput() {
+        guard !fields.isInvalidated, NSApplication.shared.isActive else {
+            fields.setEnabled(false)
+            inputProtected = false
+            return
+        }
+        fields.secureInput.acquire()
+        inputProtected = fields.secureInput.isActive
+        fields.setEnabled(inputProtected)
+        if !inputProtected { problem = "Secure keyboard input is unavailable. Close this sheet and try again." }
     }
 
     private func generate() {
-        passphrase = VaultCrypto.suggestedPassphrase()
-        confirmation = passphrase
-        isRevealed = true
-        copied = false
-        problem = nil
+        guard !fields.isInvalidated, inputProtected, fields.secureInput.isActive else { return }
+        do {
+            try autoreleasepool {
+                let suggestion = try VaultCrypto.suggestedPassphrase()
+                fields.passphrase.stringValue = suggestion
+                fields.confirmation.stringValue = suggestion
+            }
+            copied = false
+            problem = nil
+        } catch { problem = error.localizedDescription }
     }
 
-    /// Marked as concealed so clipboard managers leave it alone, and cleared
-    /// again shortly afterwards unless something else has taken the clipboard
-    /// over in the meantime.
+    /// Copy is an explicit transfer to the system clipboard. Concealed/transient
+    /// markers ask cooperating clipboard managers not to retain it, and the
+    /// current-host-only option prevents Universal Clipboard transfer.
     private func copy() {
-        let pasteboard = NSPasteboard.general
-        let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
-        pasteboard.declareTypes([.string, concealed], owner: nil)
-        pasteboard.setString(passphrase, forType: .string)
-        pasteboard.setString("", forType: concealed)
-
-        copied = true
-        let stamp = pasteboard.changeCount
-        DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
-            guard NSPasteboard.general.changeCount == stamp else { return }
-            NSPasteboard.general.clearContents()
+        guard !fields.isInvalidated, inputProtected, fields.secureInput.isActive else { return }
+        autoreleasepool {
+            fields.passphrase.validateEditing()
+            let value = fields.passphrase.stringValue
+            guard !value.isEmpty else { return }
+            let pasteboard = NSPasteboard.general
+            let item = NSPasteboardItem()
+            item.setString(value, forType: .string)
+            item.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+            item.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+            pasteboard.prepareForNewContents(with: .currentHostOnly)
+            copied = pasteboard.writeObjects([item])
+            let stamp = pasteboard.changeCount
+            if copied { RecoveryClipboard.remember(changeCount: stamp) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
+                RecoveryClipboard.clearIfOwned(changeCount: stamp)
+            }
         }
     }
 
     private func submit() {
-        guard isComplete else { return }
-        if purpose.wantsConfirmation {
-            guard passphrase == confirmation else {
-                problem = "The two passphrases do not match."
-                return
-            }
-            guard passphrase.count >= VaultCrypto.minimumPassphraseLength else {
-                problem = "Use at least \(VaultCrypto.minimumPassphraseLength) characters."
-                return
-            }
-        }
-
+        guard !fields.isInvalidated, inputProtected, fields.secureInput.isActive else { return }
         do {
-            try onSubmit(Entry(current: purpose.wantsCurrent ? current : nil, new: passphrase))
-            current = ""
-            passphrase = ""
-            confirmation = ""
+            try autoreleasepool {
+                fields.validateEditing()
+                let passphrase = fields.passphrase.stringValue
+                guard !passphrase.isEmpty else {
+                    throw EntryError.message("Enter your recovery passphrase.")
+                }
+                guard passphrase.utf8.count <= VaultCrypto.maximumPassphraseBytes else {
+                    throw EntryError.message("The recovery passphrase is too long.")
+                }
+                let current = purpose.wantsCurrent ? fields.current.stringValue : nil
+                if purpose.wantsCurrent && (current?.isEmpty ?? true) {
+                    throw EntryError.message("Enter the current recovery passphrase.")
+                }
+                if purpose.wantsConfirmation {
+                    guard passphrase == fields.confirmation.stringValue else {
+                        throw EntryError.message("The two passphrases do not match.")
+                    }
+                    guard passphrase.count >= VaultCrypto.minimumPassphraseLength else {
+                        throw EntryError.message("Use at least \(VaultCrypto.minimumPassphraseLength) characters.")
+                    }
+                }
+                // Synchronous scope only: no async task, SwiftUI state, or
+                // persistent model retains Entry or the field's String bridge.
+                try onSubmit(Entry(current: current, new: passphrase))
+            }
+            fields.invalidate()
         } catch {
             problem = error.localizedDescription
         }
+    }
+
+    private enum EntryError: LocalizedError {
+        case message(String)
+        var errorDescription: String? { switch self { case .message(let text): return text } }
+    }
+}
+
+/// Tracks only an explicitly copied recovery phrase, never its plaintext.
+/// Locking cannot leave that phrase available as an immediate alternate unlock.
+@MainActor
+enum RecoveryClipboard {
+    private static var ownedChangeCount: Int?
+
+    static func remember(changeCount: Int) { ownedChangeCount = changeCount }
+
+    static func clearIfOwned(changeCount: Int? = nil, pasteboard: NSPasteboard = .general) {
+        guard let owned = ownedChangeCount,
+              changeCount == nil || changeCount == owned else { return }
+        if pasteboard.changeCount == owned { pasteboard.clearContents() }
+        ownedChangeCount = nil
+    }
+}
+
+@MainActor
+private final class RecoveryFields {
+    let current = NSSecureTextField()
+    let passphrase = NSSecureTextField()
+    let confirmation = NSSecureTextField()
+    let secureInput = SecureInputSession()
+    private(set) var isInvalidated = false
+
+    init() {
+        for field in [current, passphrase, confirmation] {
+            field.maximumNumberOfLines = 1
+            field.isAutomaticTextCompletionEnabled = false
+            field.allowsEditingTextAttributes = false
+            field.isEnabled = false
+        }
+    }
+
+    func setEnabled(_ enabled: Bool) {
+        for field in [current, passphrase, confirmation] { field.isEnabled = enabled && !isInvalidated }
+    }
+
+    func invalidate() {
+        isInvalidated = true
+        clear()
+        setEnabled(false)
+        secureInput.release()
+    }
+
+    func validateEditing() {
+        for field in [current, passphrase, confirmation] { field.validateEditing() }
+    }
+
+    func clear() {
+        for field in [current, passphrase, confirmation] {
+            field.currentEditor()?.string = ""
+            field.stringValue = ""
+        }
+    }
+}
+
+@MainActor
+private struct NativeRecoveryField: NSViewRepresentable {
+    let field: NSSecureTextField
+    let placeholder: String
+    let focusInitially: Bool
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onSubmit: onSubmit) }
+
+    func makeNSView(context: Context) -> NSSecureTextField {
+        field.placeholderString = placeholder
+        field.target = context.coordinator
+        field.action = #selector(Coordinator.submit(_:))
+        if focusInitially {
+            DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        }
+        return field
+    }
+
+    func updateNSView(_ nsView: NSSecureTextField, context: Context) {
+        context.coordinator.onSubmit = onSubmit
+    }
+
+    final class Coordinator: NSObject {
+        var onSubmit: () -> Void
+        init(onSubmit: @escaping () -> Void) { self.onSubmit = onSubmit }
+        @objc func submit(_ sender: Any?) { onSubmit() }
     }
 }

@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import SSH_Wakey
 
@@ -44,7 +45,7 @@ final class ConnectionPersistenceTests: XCTestCase {
 
     func testDefaultDirectoryIsInsideApplicationSupport() {
         let path = ConnectionFileStore.defaultDirectory.path
-        XCTAssertTrue(path.hasSuffix("/Library/Application Support/SSH-Wakey"), path)
+        XCTAssertTrue(path.hasSuffix("/Library/Application Support/" + AppDistribution.supportFolderName), path)
     }
 
     func testFileAndDirectoryAreOnlyReadableByThisUser() throws {
@@ -82,7 +83,7 @@ final class ConnectionPersistenceTests: XCTestCase {
         {"version":1,"connections":[{"name":"Old","username":"admin","host":"10.0.0.9"}]}
         """
         try store.createDirectoryIfNeeded()
-        try Data(legacy.utf8).write(to: store.fileURL)
+        try ProtectedFile.write(Data(legacy.utf8), to: store.fileURL)
 
         let loaded = try store.load()
         XCTAssertEqual(loaded.count, 1)
@@ -98,7 +99,7 @@ final class ConnectionPersistenceTests: XCTestCase {
         {"version":1,"connections":[{"name":"Old","username":"admin","host":"10.0.0.9","connectMode":"nope"}]}
         """
         try store.createDirectoryIfNeeded()
-        try Data(legacy.utf8).write(to: store.fileURL)
+        try ProtectedFile.write(Data(legacy.utf8), to: store.fileURL)
 
         let loaded = try store.load()
         XCTAssertEqual(loaded.first?.connectMode, .unlock)
@@ -106,18 +107,34 @@ final class ConnectionPersistenceTests: XCTestCase {
 
     func testFileFromANewerFormatIsRefusedRatherThanMisread() throws {
         try store.createDirectoryIfNeeded()
-        try Data("""
+        try ProtectedFile.write(Data("""
         {"version":99,"connections":[]}
-        """.utf8).write(to: store.fileURL)
+        """.utf8), to: store.fileURL)
 
         XCTAssertThrowsError(try store.load()) { error in
             XCTAssertEqual(error as? ConnectionFileStore.StoreError, .unsupportedVersion(99))
+            XCTAssertTrue(
+                (error as? LocalizedError)?.errorDescription?
+                    .localizedCaseInsensitiveContains("too old") == true,
+                String(describing: error))
         }
+    }
+
+    func testAnExistingEmptyFileIsRefusedAsDamaged() throws {
+        try store.createDirectoryIfNeeded()
+        try ProtectedFile.write(Data(), to: store.fileURL)
+
+        XCTAssertThrowsError(try store.load()) { error in
+            guard case .damagedOrAltered = error as? ConnectionFileStore.StoreError else {
+                return XCTFail("Expected .damagedOrAltered, got \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: store.fileURL).count, 0)
     }
 
     func testCorruptFileReportsAReadableError() throws {
         try store.createDirectoryIfNeeded()
-        try Data("this is not json".utf8).write(to: store.fileURL)
+        try ProtectedFile.write(Data("this is not json".utf8), to: store.fileURL)
 
         XCTAssertThrowsError(try store.load()) { error in
             guard case .damagedOrAltered = error as? ConnectionFileStore.StoreError else {
@@ -150,4 +167,44 @@ final class ConnectionPersistenceTests: XCTestCase {
             SSHConnection(name: "A", username: "admin", host: "mac.local", port: 2222).displayDestination,
             "admin@mac.local:2222")
     }
+
+    func testUnreadableParentIsNotMistakenForMissingStorage() throws {
+        try store.save([SSHConnection(name: "Original", username: "audit", host: "original.invalid")])
+        XCTAssertEqual(chmod(directory.path, 0), 0)
+        defer { chmod(directory.path, 0o700) }
+        XCTAssertThrowsError(try store.read())
+    }
+
+    func testBrokenSymlinkIsNotMistakenForFirstLaunch() throws {
+        try store.createDirectoryIfNeeded()
+        try FileManager.default.createSymbolicLink(
+            at: store.fileURL, withDestinationURL: directory.appendingPathComponent("missing.json"))
+        XCTAssertThrowsError(try store.read())
+    }
+
+    func testUnreadableFileRemainsUnavailableAfterPermissionsAreRestored() throws {
+        try store.save([SSHConnection(name: "Original", username: "audit", host: "original.invalid")])
+        let original = try Data(contentsOf: store.fileURL)
+        XCTAssertEqual(chmod(store.fileURL.path, 0), 0)
+        XCTAssertThrowsError(try store.read())
+        XCTAssertEqual(chmod(store.fileURL.path, 0o600), 0)
+        XCTAssertEqual(try Data(contentsOf: store.fileURL), original)
+    }
+
+
+    func testConflictingTransactionDoesNotRunKeychainSideEffects() throws {
+        try store.save([])
+        let snapshot = try store.readSnapshot()
+        try store.save([SSHConnection(name: "External", username: "audit", host: "external.invalid")])
+        var builtDocument = false
+        var completed = false
+        XCTAssertThrowsError(try store.commit(expectedRevision: snapshot.revision, afterWrite: { completed = true }) {
+            builtDocument = true
+            return ConnectionFileStore.Document(connections: [])
+        })
+        XCTAssertFalse(builtDocument)
+        XCTAssertFalse(completed)
+        XCTAssertEqual(try store.load().first?.host, "external.invalid")
+    }
+
 }

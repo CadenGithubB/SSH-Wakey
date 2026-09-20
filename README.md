@@ -4,6 +4,8 @@
 
 # SSH-Wakey
 
+Version **1.3.0** (build **5**). See the [release notes](CHANGELOG.md).
+
 A small native macOS app that keeps a list of SSH destinations so you do not
 have to remember usernames, addresses and ports when you need to get back into
 a machine.
@@ -22,7 +24,7 @@ Notes and the schema are in [docs/jamf/README.md](docs/jamf/README.md).
 
 - Swift and SwiftUI, macOS 14 or later
 - No third-party dependencies at all
-- No password storage, no key storage, no sync, no telemetry, no discovery
+- No SSH password or private-key storage, no sync, no telemetry, no discovery
 
 ---
 
@@ -52,16 +54,17 @@ xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey -destination 'platform
 ```
 
 **Run the Release build.** It has the Hardened Runtime on and no
-`get-task-allow` entitlement, so another process running as you cannot attach a
-debugger and read the password out of memory. The Debug build deliberately keeps
-both, because Xcode cannot attach a debugger otherwise. SECURITY.md explains the
-difference and how to check a build.
+`get-task-allow` entitlement, restricting ordinary debugger attachment and code
+injection. The main app's Debug configuration permits debugger attachment;
+both password helpers retain Hardened Runtime in every configuration.
+[SECURITY.md](SECURITY.md) explains these boundaries and how to check a build.
 
-The build is ad-hoc signed (`CODE_SIGN_IDENTITY = "-"`), which is enough to run
-it on the Mac that built it. The App Sandbox is deliberately off: the app runs
-`/usr/bin/ssh`, reads `~/.ssh/known_hosts`, and writes to Application Support
-outside a sandbox container. To distribute it to another Mac you would need your
-own signing identity and notarisation.
+Local builds are ad-hoc signed (`CODE_SIGN_IDENTITY = "-"`). The main app runs
+`/usr/bin/ssh` and writes its private trust and connection files outside a
+sandbox container. It and the metadata-only askpass adapter are unsandboxed.
+The password-entry XPC service is separately signed and sandboxed, with no
+network or general user-file access entitlement. Distribution still requires
+Developer ID signing, notarisation, and validation on the target Macs.
 
 ---
 
@@ -73,18 +76,17 @@ own signing identity and notarisation.
 
 Builds the Release configuration and puts the app in `/Applications`. Release is
 the one to install: it has the Hardened Runtime on and no `get-task-allow`
-entitlement, so nothing running as you can attach a debugger and read the
-password out of memory. Debug keeps both so Xcode can attach, which is the right
-trade for development and the wrong one for daily use.
+entitlement. The scripts reject missing runtime protection, invalid signatures
+and debug/code-loading exception entitlements. Debug is for development and
+permits debugger attachment.
 
 Run it again to update. It replaces the bundle rather than merging into it, so a
 renamed or deleted file cannot leave something stale behind, and it refuses to
 touch `/Applications/SSH-Wakey.app` if that turns out to be some other app.
 
-`spctl` will report the installed app as rejected. That is expected and it does
-not stop it opening. Gatekeeper only assesses an app that arrived with a
-quarantine flag, which is attached to downloads and AirDrops. An app you built
-and copied locally has no such flag, so it is never assessed.
+This script builds and installs a local ad-hoc-signed app. Its signature checks
+verify bundle integrity and hardening; they do not provide Developer ID signing
+or notarisation for distribution.
 
 ### Managed copy for Jamf
 
@@ -121,14 +123,11 @@ Writes `build/SSH-Wakey.dmg`. For the IT copy:
 ./Scripts/make-dmg-managed.sh
 ```
 
-Writes `build/SSH-Wakey-Managed.dmg`. Be aware of what that means, though: both
-apps are signed ad-hoc and are not notarised, so on any Mac that did not build
-them the quarantine flag will be there and Gatekeeper will refuse them
-outright. Getting past that means right-clicking and choosing Open, or
-stripping the flag by hand, and teaching people to do either is a bad habit. If
-you want to hand this to someone else, sign it with a Developer ID and notarise
-it first. A Jamf policy that installs the Managed app as root usually avoids
-that prompt; Self Service downloads of an ad-hoc signed app still get it.
+Writes `build/SSH-Wakey-Managed.dmg`. These scripts currently produce local
+ad-hoc-signed verification builds, not notarised distribution artifacts. Before
+sharing either app, sign all components with Developer ID, notarise the result,
+and test installation and password entry on the supported target systems.
+The same distribution checks apply to the Managed app deployed through Jamf.
 
 ---
 
@@ -139,8 +138,10 @@ that prompt; Self Service downloads of an ad-hoc signed app still get it.
    Open a session is chosen here too, and remembered on that connection.
 2. Select a connection. The menu beside the button is for **that** machine.
 3. Press **Wake** (the default) or **Connect**, or double-click the row.
-4. Type the password in the sheet that appears. The sheet shows the destination
-   and the mode, so you can still change the mode without cancelling.
+4. Verify an unknown host using its independently obtained fingerprint, then
+   type the password in the native popup when SSH requests it. The popup shows
+   the destination and requested action. To change the action, cancel the popup
+   and select Wake or Connect in the main window.
 
 The rest of this section is Standard. The Managed copy has no Add, Edit, or
 Open a session: select an assigned machine and press Wake.
@@ -158,11 +159,9 @@ machine...** during that. If TCP still times out, it pokes once more and
 tries SSH again. This is not Apple Remote Desktop; it is the same idea: wake
 first, then log in.
 
-It works even though the machine hangs up the moment it accepts the password,
-because ssh is asked to announce that it authenticated and the app watches for
-that rather than for a clean exit. A login that succeeded and a login that was
-refused produce the same exit code, so without it the two would be
-indistinguishable.
+A verified helper callback runs after SSH authenticates, allowing the app to
+recognize success even when the target immediately disconnects. It does not
+trust diagnostic text or the process exit code as evidence of authentication.
 
 **Open a session** (the button then says **Connect**) logs in and holds the
 connection open. When it says Connected, **Open in Terminal** starts a shell on
@@ -220,13 +219,10 @@ there greyed out. Remove works for one row or several. Both are refused while
 any selected machine has a session open. The gear beside them opens Settings,
 where encryption lives.
 
-The **Help** menu has **Save Diagnostics…**, which writes what happened on the
-last few connection attempts to a text file: what was tried, what ssh said in
-full, and what the password channel did. Useful when something fails for a reason
-the status panel cannot name. It lists hostnames, usernames and key fingerprints,
-and no passwords, and the file says so at the top before anything else.
-Right-clicking a row and choosing **Activity…** shows the same record for that
-one machine, without writing a file.
+The **Help** menu has **Save Diagnostics…**, which exports recent curated
+connection statuses and destination metadata. Raw server output and prompts are
+excluded because an SSH server can reflect a password into them. **Activity…**
+shows the same bounded, in-memory history for one machine.
 
 The **?** button opens **What SSH-Wakey does**: what it saves, how Wake and
 Connect work, what reaching a Mac at the FileVault screen needs, and what the
@@ -298,9 +294,11 @@ can read it. Writes are atomic, and permissions are reapplied after every save
 because an atomic write replaces the file.
 
 The Managed build does not use this file. Its list is the forced Jamf payload,
-read live. The only thing it may write is
+read live. Alongside its private host-key trust file, it may write
 `~/Library/Application Support/SSH-Wakey Managed/link-addresses.json`, a host →
-MAC cache for Wake, still `0600` and still not a password.
+MAC cache for Wake, still `0600` and still not a password. Standard keeps learned
+MAC addresses within its connection file, including when encrypted, and removes
+the legacy plaintext sidecar when enabling/opening encryption.
 
 There is no password field, and there never will be. You can edit the file by
 hand while the app is closed; anything invalid is caught by the same validation
@@ -318,20 +316,21 @@ Once on, the file holds nothing readable: no names, no usernames, no addresses.
 The list is sealed with AES-GCM under a random key, and that key is then wrapped
 twice, so there are two independent ways in.
 
-- **A key in your Keychain.** Used silently every time the app opens the file.
-  You never see it and never type anything.
-- **Your recovery passphrase.** Used only when that key has gone: a Keychain
-  reset, a new Mac, an item deleted by hand. Put it in your password manager. It
-  is not meant to be memorised.
+- **A local key.** Initially kept in your Keychain and used silently when the
+  app opens. Optional [App Lock](#app-lock) replaces this with a Secure Enclave
+  key that requires Touch ID or your Mac login password.
+- **Your recovery passphrase.** An independent way in if the local key is
+  unavailable, including after a Keychain reset or a move to a new Mac. Put it
+  in your password manager. It is not meant to be memorised.
 
 Losing one does not lose the data. This is the same shape as a disk encryption
 recovery key: the passphrase does not decrypt the file, it decrypts the key that
-does. That is why changing the passphrase is instant and does not rewrite the
-file.
+does. Changing the passphrase rotates that data key and re-encrypts the file,
+so an old vault copy and its passphrase cannot decrypt future saves.
 
-When the Keychain key is missing the window says so and offers to unlock. Enter
-the passphrase, and a fresh Keychain key is stored so the next launch is silent
-again. Nothing can be edited while it is locked.
+Without App Lock, recovery restores missing Keychain access so the next launch
+is silent again. With App Lock, recovery opens the current session and keeps
+automatic locking enabled. Nothing can be edited while it is locked.
 
 **Export a Readable Copy** writes an ordinary unencrypted file, in exactly the
 format an unencrypted install uses, so it can be read by eye or put straight
@@ -341,19 +340,19 @@ removes the Keychain key. Exporting, turning encryption off and changing the
 passphrase all ask for the current passphrase first, so every route to a lasting
 plain-text copy needs the same proof.
 
-The passphrase sheet will generate a strong one, show it, and copy it with the
-clipboard marked so clipboard managers ignore it and cleared again after ninety
-seconds. It also opens the Passwords app, though you have to paste it in
-yourself: macOS refuses to let an unsigned app write there.
+The passphrase sheet can generate a strong one and copy it explicitly. Clipboard
+privacy hints and clearing after ninety seconds reduce exposure but do not
+prevent another application from reading a copied secret. The Open Passwords
+button opens Apple's app so you can save the recovery passphrase there yourself.
 
 Export once as soon as you turn encryption on. If the passphrase is ever
 forgotten while the Keychain key still works, the file opens but cannot be
 exported, turned off or re-keyed, and the only way out is to read the
 connections off the screen and enter them again.
 
-Worth keeping in proportion. FileVault already encrypts this file whenever the
-Mac is off or locked, only your account can read it, and it holds no passwords
-or keys. Encrypting it closes three narrower gaps: a program running as you
+FileVault protects storage at rest; locking the screen does not relock a mounted
+volume. File permissions restrict other accounts, and the metadata file holds no
+SSH passwords or private keys. Encrypting it closes three narrower gaps: a program running as you
 reading it directly, an unencrypted backup destination, and the file being copied
 somewhere by accident. SECURITY.md is explicit about what it does and does not
 buy.
@@ -368,78 +367,78 @@ Extra arguments are split by the app, honouring quotes and backslashes, and are
 passed to `Process` as an array. No shell is involved, so `;`, `|`, `$(...)` and
 friends are just characters. Options are then checked:
 
-- Refused as dangerous: anything that can make `ssh` run another program or
-  redirect its trust decisions, including `ProxyCommand`, `LocalCommand`,
-  `PermitLocalCommand`, `KnownHostsCommand`, `PKCS11Provider`, `Match`,
-  `Include` and `UserKnownHostsFile`.
+- `-o` options are an allow list: only a fixed set that tunes how the one
+  connection is made is accepted, so a keyword nobody has vetted — including a
+  future one that can run code — is refused by default. `ProxyCommand`,
+  `LocalCommand`, `PermitLocalCommand`, `KnownHostsCommand`, `PKCS11Provider`,
+  `Match`, `Include` and `UserKnownHostsFile` are also named so the refusal
+  explains itself.
+- Refused as dangerous flags: `-F` (an alternate config file that can contain
+  any of the above) and `-I` (loads a PKCS#11 library into `ssh`, the
+  command-line twin of `PKCS11Provider`).
 - Refused as reserved: options the app sets itself, such as `-p`, `-l`, `-M`,
-  `-S`, `StrictHostKeyChecking` and `ControlPath`.
+  `-S`, `-q`, `StrictHostKeyChecking`, `LogLevel` and `ControlPath`.
 - Refused as unrecognised: any flag that is not a real `ssh` option, and any
   bare operand, since the destination comes from the fields.
 
----
+SSH-Wakey runs `ssh` with `-F /dev/null`, disables global trust files, and uses
+a validated snapshot of its own private `known_hosts` file in Application
+Support. User and system config cannot inject commands or override host trust.
+Strict host-key checking is always enabled. Old settings that disabled it are
+normalized to strict checking. Unknown Ed25519 keys require an independently
+obtained fingerprint before enrollment; changed keys are refused.
+
+Jump hosts (`-J`), forwarding, arbitrary local commands, authentication overrides
+and algorithm downgrades are unsupported. Extra options are limited to IP version,
+verbosity, identity-file selection, identities-only behavior and bounded
+connection/keepalive tuning. Existing connections using removed options must be
+edited before use.
 
 ## How passwords are handled
 
-Short version: typed once, held in memory for seconds, never written anywhere,
-never passed as an argument, never reused.
+SSH invokes a small signed adapter, which opens a separately signed, sandboxed
+password-entry service. Only that short-lived service contains the native popup. The main app no longer has a SwiftUI password binding,
+password buffer or socket carrying the password. The helper and app verify each
+other's code identity and the exact registered SSH parent. A copied environment
+or a genuine helper launched from an unrelated process is refused.
 
-The app sets `SSH_ASKPASS` to **its own executable** and `SSH_ASKPASS_REQUIRE` to
-`force`. When `ssh` needs the password it runs that program, which is SSH-Wakey
-again, in a mode selected purely by two environment variables that exist only in
-the environment of that one `ssh` process. The helper connects back to the app
-over a UNIX socket in a `0700` folder, presents a 256-bit one-time token, and
-receives the password on standard output. Then it exits.
+The popup displays the app-provided destination. On submission, the helper copies
+UTF-8 directly into locked, wipeable memory, rechecks authorization, writes to
+SSH's pipe, wipes its controlled buffer and exits. Locking failure prevents
+submission. Only one password prompt is authorized per attempt; repeated prompts
+are refused. Cancellation and a two-minute prompt deadline close the helper.
+The app does not intentionally save SSH passwords, put them in arguments or
+environment variables, or include them in diagnostics.
 
-What that avoids:
+A native field still makes AppKit-managed copies and a brief Swift String bridge.
+Those copies cannot be guaranteed erased. The helper confines SSH input copies to
+a process that exits; OpenSSH and OS-managed memory are separate boundaries.
+The service has no network or general file-access entitlements. It receives only
+an already-authorized channel, SSH's output pipe, and read-only code handles for
+caller verification. macOS still gives sandboxed processes access to their own
+container and necessary system resources; this is not a claim of zero filesystem
+access. Recovery passphrases also cross native/cryptographic framework boundaries.
+[SECURITY.md](SECURITY.md) documents the complete memory and threat model without
+claiming that plaintext never exists in RAM.
 
-- **No temporary password file.** None is created, so there is nothing to delete
-  and nothing to recover.
-- **No password in any command line.** `ps` shows the `ssh` arguments and none of
-  them is a secret.
-- **No password in a persistent environment variable.** The socket path and the
-  token are environment values; the password is not.
-- **No reuse.** The password is served at most once per attempt. The socket is
-  unlinked and its folder removed when the attempt ends, so the helper has
-  nothing to connect to afterwards.
-- **No answering the wrong question.** The helper only replies to a prompt that
-  looks like a password prompt, so it cannot be talked into answering a host key
-  confirmation or a key passphrase.
-
-The password is copied out of the text field into a buffer the app can overwrite,
-pinned with `mlock` so it never reaches swap, and zeroed as soon as it has been
-served. It is gone before a session exists: the open connection is held by ssh,
-and the Terminal window that attaches to it never needs a password. `SECURITY.md` covers the
-model, and its limits, properly.
-
-### One password, one attempt
-
-When the first authentication method rejects the password, `ssh` asks again for
-the next method. Answering would be a silent retry, so SSH-Wakey does not; it
-reports that it happened and you press Connect again. A wrong password therefore
-costs one failed attempt per method offered, not a loop.
-
----
+Success comes from a verified helper callback that OpenSSH runs after
+authentication. Banners and even internal diagnostic lines can be forged by a
+server, so they never count as authentication evidence. The Terminal client
+attaches to the existing master and fails closed if it disappears.
 
 ## SSH authentication limitations
 
-- **Interactive password and keyboard-interactive only.** If a server offers a
-  key you already have, `ssh` uses it and the typed password is never sent; the
-  app says so.
-- **One password prompt, and nothing else.** SSH can carry a multi-step login
-  through its keyboard-interactive method: a one-time code, a push notification,
-  or a forced password change. SSH-Wakey answers a single password prompt and
-  refuses every other question, so a server that asks a second one fails with an
-  explanation rather than hanging. It is built for password logins to machines
-  that ask once. If you need multi-step authentication, open an issue or send a
-  pull request and it can go in.
-- **Keys and passphrases are never handled.** SSH-Wakey does not create, read,
-  unlock or store private keys. Use `ssh-agent` if you want key auth.
-- **Host keys are your own.** The app uses your `~/.ssh/known_hosts`. With
-  strict checking on, an unknown host is refused and the app offers to show you
-  the fingerprint before adding it. A host key that has *changed* is always
-  refused, and the app will not edit that entry for you.
-- **One session per saved connection** at a time.
+- **A single password prompt.** Multi-step challenges, one-time codes and forced
+  password changes are unsupported. The app refuses a second prompt.
+- **Key authentication.** System SSH can use default/selected identity files or
+  an existing agent. The app does not read or store private keys or answer key
+  passphrase prompts. Successful key authentication needs no password popup.
+- **Independent host trust.** Trust is specific to each SSH-Wakey distribution.
+  Existing `~/.ssh/known_hosts` entries are not automatically imported. Ed25519
+  is the supported host-key algorithm; verify the fingerprint on the target or
+  through another trusted channel before enrolling it.
+- **One session per saved connection** at a time. Jump hosts and forwarding are
+  deliberately unavailable in this password flow.
 
 ---
 
@@ -534,12 +533,14 @@ bare name with no dots.
 
 ## External dependencies
 
-None. No packages, no frameworks beyond SwiftUI, AppKit and Foundation, and no
-network access except the SSH connections you ask for.
+There are no third-party packages. The app uses system frameworks including
+SwiftUI, AppKit, Foundation, Security, CryptoKit, CommonCrypto and Carbon.
+Network activity is limited to requested SSH/host-key checks, wake packets and
+associated name/address lookup.
 
-The app runs these system binaries: `/usr/bin/ssh`, `/usr/bin/ssh-keyscan` and
-`/usr/bin/ssh-keygen` for host key fingerprints, and `/usr/bin/open` to hand a
-session to Terminal.
+System tools are `/usr/bin/ssh`, `/usr/bin/ssh-keyscan`, `/usr/sbin/arp` and
+`/usr/bin/open`. Fingerprints are computed in process. The fixed authentication
+callback and private Terminal script are the two controlled shell paths.
 
 ---
 
@@ -563,32 +564,66 @@ SSH-Wakey/
     SSHArgumentParser.swift    Quote-aware tokeniser plus the option allow list
   SSH/
     AskpassProtocol.swift   Contract between the app and its own askpass mode
-    AskpassChannel.swift    One-shot local password channel (app side)
+    AskpassChannel.swift    One-attempt helper authorization and authentication status
     AskpassHelper.swift     The askpass client half
-    SecureBuffer.swift      Wipeable heap buffer for the password
-    SSHCommandBuilder.swift Argument arrays; no string interpolation anywhere
+    SecureBuffer.swift      Page-aligned, locked, wipeable buffer
+    SSHCommandBuilder.swift Argument arrays; validated argv and a fixed signed-helper callback
     SSHSessionManager.swift Runs the master, tracks state, owns live sessions
     SSHFailure.swift        Turns ssh's stderr into something worth reading
     HostKeyService.swift    Fingerprints and known_hosts
     TerminalHandoff.swift   Attaches Terminal to an authenticated session
     NetworkScope.swift      Tells a local address from a routable one
-    ProcessRunner.swift     Small async wrapper around Process
+    ProcessRunner.swift     Small async wrapper around posix_spawn/waitpid
     DiagnosticsReport.swift Recent attempts, also written by Save Diagnostics
+  Helpers/Askpass/           Signed metadata-only SSH adapter
+  Helpers/PasswordInput/     Sandboxed, short-lived password-entry XPC service
   Views/                    SwiftUI window, editor, password prompt, activity, host key sheet
-SSH-WakeyTests/             254 tests
+SSH-WakeyTests/             Security and behavior regression tests
 ```
+
+## App Lock
+
+In the standard app, turn on connection-file encryption, then choose
+**Settings → Turn On App Lock**. Confirm the vault's recovery passphrase and
+authenticate in the macOS dialog using Touch ID or your Mac login password.
+SSH-Wakey never asks you to type your local Mac password into its own fields.
+
+Once enabled, the app starts locked. Authentication opens it for **five minutes
+without activity in SSH-Wakey**. Using Terminal or another app does not reset
+that timer. Screen lock, sleep and user switching also lock the app. **Lock Now**
+and **⇧⌘L** lock it immediately.
+
+Locking cancels connection attempts, disconnects SSH sessions (including Terminal
+windows attached to them), dismisses open editors, clears activity records, and
+releases the open vault key and connection list. Unsaved edits are discarded.
+An explicitly copied recovery phrase is cleared from the clipboard if nothing
+else has replaced it. Unlocking never reconnects a previous session automatically.
+Terminal scrollback and remote background jobs are outside App Lock's control.
+
+The protected local key uses this Mac's Secure Enclave and requires macOS user
+authentication. A compatible Mac is required; unsupported hardware refuses to
+enable App Lock. The recovery passphrase remains an alternative way to open the
+vault and does not turn App Lock off. Keep it safe: it also permits removing
+App Lock or exporting readable data.
+
+App Lock does not save or reuse remote SSH passwords. Each password-based SSH
+attempt still has its own separate native prompt. App Lock also does not secure
+an already compromised operating system or guarantee erasure of framework-owned
+memory. See [SECURITY.md](SECURITY.md) for its boundaries.
 
 ## Tests
 
-254 unit tests covering persistence and its file permissions, timestamps, change
-history, the encrypted file and both ways into it, appending to known_hosts, which columns may be hidden and how the table
-layout is saved, field and argument validation, command construction, wake packets
-and MAC parsing, managed-catalog overlays, failure
-classification against real OpenSSH diagnostics, local address detection, the
-password buffer, the Terminal handoff script, and the password channel itself. The channel tests run the real client code against the real
-server code in process, including the cases where it must refuse: a bad token, a
-prompt that is not a password prompt, and a second ask after the password has
-already been served.
+The suite currently contains **388 tests**, run against both the standard and
+managed app variants during the September 2026 security review.
+
+The suite covers private-file access, unavailable storage, concurrent writes,
+vault metadata and independent recovery slots, key rotation, managed validation,
+strict host trust, argument isolation, helper identity and replay refusal,
+password lifetime rules, bounded subprocesses, Terminal fallback and isolated
+session cleanup, App Lock timing and lifecycle notifications, cancelled
+authentication, protected-key migration and damaged-slot recovery. All
+credentials and keys in tests are synthetic. Tests must
+never inspect or sweep the user's actual temporary SSH sessions.
 
 ```bash
 xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey -destination 'platform=macOS' test

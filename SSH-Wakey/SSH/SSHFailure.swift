@@ -27,9 +27,7 @@ struct SSHFailure: Equatable, Sendable {
     var headline: String
     /// What to try next. Shown under the headline.
     var guidance: String?
-    /// Raw ssh diagnostics, shown only when the user opens Details. Never
-    /// contains the password: it is ssh's own stderr, and the password is
-    /// never on the command line ssh was given.
+    /// Optional curated detail. Server-controlled diagnostics are never stored here.
     var detail: String?
     /// Set when the destination is on the local network and the failure looks
     /// like what a missing Local Network permission produces.
@@ -57,21 +55,11 @@ struct SSHFailure: Equatable, Sendable {
 /// without opening a socket.
 enum SSHOutputClassifier {
 
-    /// True once ssh has said it authenticated.
-    ///
-    /// Only printed at `LogLevel=VERBOSE`. It is the one signal that survives
-    /// the server hanging up immediately afterwards, which is exactly what a
-    /// Mac unlocking its FileVault disk does. A partial success is not a
-    /// success, so it deliberately does not match.
-    static func indicatesAuthenticationSucceeded(_ standardError: String) -> Bool {
-        standardError.contains("Authenticated to ")
-    }
-
     static func classify(exitCode: Int32, standardError: String) -> SSHFailure {
         let text = standardError
         let lowered = text.lowercased()
-        let detail = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDetail = detail.isEmpty ? nil : detail
+        // Never retain server-controlled text in errors or exported history.
+        let trimmedDetail: String? = nil
 
         if text.contains("REMOTE HOST IDENTIFICATION HAS CHANGED") {
             return SSHFailure(
@@ -79,7 +67,7 @@ enum SSHOutputClassifier {
                 headline: "The server's host key has changed.",
                 guidance: "This can mean the machine was reinstalled, or that something is impersonating it. "
                     + "Confirm the new fingerprint with someone who has physical access, then remove the old line "
-                    + "from ~/.ssh/known_hosts yourself. SSH-Wakey will not do that for you.",
+                    + "from SSH-Wakey’s private known_hosts file after independent verification. SSH-Wakey will not do that for you.",
                 detail: trimmedDetail)
         }
 
@@ -170,7 +158,7 @@ enum SSHOutputClassifier {
         return SSHFailure(
             kind: .unknown,
             headline: "The connection failed. ssh exited with status \(exitCode).",
-            guidance: trimmedDetail == nil ? "ssh gave no diagnostics." : "See the details below.",
+            guidance: "SSH did not confirm a successful login. Check the destination and authentication settings, then try again.",
             detail: trimmedDetail)
     }
 }

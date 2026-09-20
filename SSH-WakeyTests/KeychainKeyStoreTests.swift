@@ -53,4 +53,12 @@ final class KeychainKeyStoreTests: XCTestCase {
         XCTAssertEqual(first.bitCount, 256)
         XCTAssertNotEqual(first, second)
     }
+
+    func testLoadOrCreateNeverReplacesAnExistingKey() throws {
+        let first = try KeychainKeyStore.loadOrCreate(account: account)
+        let second = try KeychainKeyStore.loadOrCreate(account: account)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(try KeychainKeyStore.load(account: account), first)
+    }
+
 }

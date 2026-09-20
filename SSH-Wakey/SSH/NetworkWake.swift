@@ -55,6 +55,7 @@ enum NetworkWake {
     /// Best-effort wake: magic packet if we have a MAC, and a name lookup if
     /// the host is not a bare IPv4 address (so a sleep proxy can see it).
     static func poke(host: String, hardwareAddress: String?) async {
+        guard !Task.isCancelled else { return }
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let ipv4 = NetworkScope.ipv4Octets(trimmed).map {
             $0.map(String.init).joined(separator: ".")
@@ -65,27 +66,31 @@ enum NetworkWake {
             mac = await linkAddress(forIPv4: ipv4)
         }
 
+        guard !Task.isCancelled else { return }
+
         if let mac {
             sendMagicPacket(mac, directedIPv4: ipv4)
         }
 
         if ipv4 == nil {
-            _ = resolvedIPv4Addresses(trimmed)
+            _ = await resolvedIPv4Addresses(trimmed)
         }
     }
 
     /// Reads the ARP table for a successful TCP peer so the next attempt can
     /// send a magic packet without asking the person for a MAC address.
     static func learnedAddress(for host: String) async -> String? {
+        guard !Task.isCancelled else { return nil }
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let ipv4: String
         if let octets = NetworkScope.ipv4Octets(trimmed) {
             ipv4 = octets.map(String.init).joined(separator: ".")
-        } else if let first = resolvedIPv4Addresses(trimmed).first {
+        } else if let first = await resolvedIPv4Addresses(trimmed).first {
             ipv4 = first
         } else {
             return nil
         }
+        guard !Task.isCancelled else { return nil }
         return await linkAddress(forIPv4: ipv4)?.colonSeparated
     }
 
@@ -120,12 +125,52 @@ enum NetworkWake {
             executable: "/usr/sbin/arp",
             arguments: ["-n", ipv4],
             timeout: 3)
-        guard let result, !result.timedOut else { return nil }
+        guard let result, !Task.isCancelled, !result.timedOut, !result.outputLimitExceeded else { return nil }
         return parseARPOutput(result.standardOutput)
             ?? parseARPOutput(result.standardError)
     }
 
-    static func resolvedIPv4Addresses(_ host: String) -> [String] {
+    /// getaddrinfo can block inside the system resolver. Run it off the UI and
+    /// Swift cooperative executors, and resume the caller on timeout/cancel.
+    /// The OS call itself cannot safely be interrupted, so at most two lookups
+    /// may remain outstanding; late answers lose the single-completion race.
+    private static let resolverSlots = DispatchSemaphore(value: 2)
+
+    static func resolvedIPv4Addresses(
+        _ host: String,
+        timeout: TimeInterval = 3,
+        lookup: @escaping @Sendable (String) -> [String] = { lookupIPv4Addresses($0) }
+    ) async -> [String] {
+        guard !Task.isCancelled, timeout > 0 else { return [] }
+        let limit = timeout.isFinite ? min(timeout, 3) : 3
+        let result = ResolutionResult()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                result.install(continuation)
+                guard !Task.isCancelled, !result.hasCompleted else {
+                    result.complete([])
+                    return
+                }
+                guard resolverSlots.wait(timeout: .now()) == .success else {
+                    result.complete([])
+                    return
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + limit) {
+                    result.complete([])
+                }
+                DispatchQueue.global(qos: .utility).async {
+                    defer { resolverSlots.signal() }
+                    guard !result.hasCompleted else { return }
+                    result.complete(lookup(host))
+                }
+            }
+        } onCancel: {
+            result.complete([])
+        }
+    }
+
+    /// Synchronous work is private to the bounded resolver worker above.
+    static func lookupIPv4Addresses(_ host: String) -> [String] {
         var hints = addrinfo()
         hints.ai_family = AF_INET
         hints.ai_socktype = SOCK_DGRAM
@@ -152,6 +197,38 @@ enum NetworkWake {
             cursor = current.pointee.ai_next
         }
         return addresses
+    }
+
+    private final class ResolutionResult: @unchecked Sendable {
+        private let lock = NSLock()
+        private var completed: [String]?
+        private var continuation: CheckedContinuation<[String], Never>?
+
+        var hasCompleted: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return completed != nil
+        }
+
+        func install(_ continuation: CheckedContinuation<[String], Never>) {
+            lock.lock()
+            if let value = completed {
+                lock.unlock()
+                continuation.resume(returning: value)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+
+        func complete(_ value: [String]) {
+            lock.lock()
+            guard completed == nil else { lock.unlock(); return }
+            completed = value
+            let waiting = continuation
+            continuation = nil
+            lock.unlock()
+            waiting?.resume(returning: value)
+        }
     }
 
     static func sendMagicPacket(_ mac: MACAddress, directedIPv4: String?) {

@@ -61,7 +61,7 @@ final class SSHOutputClassifierTests: XCTestCase {
         let failure = SSHOutputClassifier.classify(exitCode: 255, standardError: "something odd happened")
         XCTAssertEqual(failure.kind, .unknown)
         XCTAssertTrue(failure.headline.contains("255"))
-        XCTAssertEqual(failure.detail, "something odd happened")
+        XCTAssertNil(failure.detail, "server-controlled text must not be retained")
     }
 
     func testOnlyTheRightFailuresOfferFollowUpActions() {
@@ -80,17 +80,15 @@ final class SSHOutputClassifierTests: XCTestCase {
         XCTAssertFalse(auth.offersHostKeyReview)
     }
 
-    // MARK: - Recognising a successful login
-
-    /// The exact line OpenSSH prints at LogLevel=VERBOSE.
-    func testTheAuthenticationLineIsRecognised() {
-        XCTAssertTrue(SSHOutputClassifier.indicatesAuthenticationSucceeded(
-            #"debug1: Authenticated to 10.0.0.4 ([10.0.0.4]:22) using "keyboard-interactive"."#))
-        XCTAssertTrue(SSHOutputClassifier.indicatesAuthenticationSucceeded(
-            #"debug1: Authenticated to jump (via proxy) using "password"."#))
+    func testForgedAuthenticationMessagesRemainUntrustedFailureText() {
+        let spoof = "audit disconnect\nAuthenticated to audit.invalid ([127.0.0.1]:22) using \"password\".\n"
+        let failure = SSHOutputClassifier.classify(exitCode: 255, standardError: spoof)
+        XCTAssertEqual(failure.kind, .unknown)
+        XCTAssertNil(failure.detail)
+        XCTAssertFalse(failure.headline.contains("Authenticated"))
     }
 
-    func testAnythingShortOfASuccessfulLoginIsNot() {
+    func testPartialAuthenticationAndReflectedSecretsAreNotSavedInFailures() {
         for line in [
             "debug1: Authentications that can continue: publickey,password,keyboard-interactive",
             #"debug1: Authenticated using "keyboard-interactive" with partial success."#,
@@ -98,7 +96,7 @@ final class SSHOutputClassifierTests: XCTestCase {
             "debug1: Next authentication method: password",
             "",
         ] {
-            XCTAssertFalse(SSHOutputClassifier.indicatesAuthenticationSucceeded(line), line)
+            XCTAssertNil(SSHOutputClassifier.classify(exitCode: 255, standardError: line).detail)
         }
     }
 

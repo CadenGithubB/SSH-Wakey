@@ -18,6 +18,9 @@ struct StatusPanel: View {
     /// Rows in the current list. Needed so “nothing selected” is not described
     /// as an empty catalog when IT has assigned machines.
     var assignedCount = 0
+    /// The saved file exists but could not be read. Idle copy must not invite
+    /// adding a machine, which would replace that file.
+    var fileUnavailable = false
 
     var onCancel: () -> Void
     var onReviewHostKey: () -> Void
@@ -170,7 +173,8 @@ struct StatusPanel: View {
         case .idle:
             guard connection != nil else {
                 return Self.unselectedHeadline(
-                    isManagedCatalog: isManagedCatalog, assignedCount: assignedCount)
+                    isManagedCatalog: isManagedCatalog, assignedCount: assignedCount,
+                    fileUnavailable: fileUnavailable)
             }
             let mode = isManagedCatalog ? ConnectMode.unlock : (connection?.connectMode ?? .unlock)
             return mode.idleHeadline(destination: destination)
@@ -197,7 +201,8 @@ struct StatusPanel: View {
         case .idle:
             if connection == nil {
                 return Self.unselectedGuidance(
-                    isManagedCatalog: isManagedCatalog, assignedCount: assignedCount)
+                    isManagedCatalog: isManagedCatalog, assignedCount: assignedCount,
+                    fileUnavailable: fileUnavailable)
             }
             return isManagedCatalog
                 ? ConnectMode.unlock.idleGuidance
@@ -210,19 +215,19 @@ struct StatusPanel: View {
             let opened = info.since.formatted(date: .omitted, time: .shortened)
             return info.usedPassword
                 ? "Authenticated at \(opened). Open in Terminal starts a shell on this session without asking again."
-                : "Authenticated at \(opened) with an SSH key, so the password you typed was never used or sent."
+                : "Authenticated at \(opened) without submitting a password."
         case .unlocked(let info):
             var lines: [String] = []
             if info.closedByServer {
-                var text = "The machine closed the connection straight after accepting the "
-                    + "password. If it was waiting at the FileVault screen, that is exactly what "
+                var text = "The machine closed the connection straight after completing "
+                    + "authentication. If it was waiting at the FileVault screen, that is what "
                     + "waking it looks like: it is starting up now."
                 if !isManagedCatalog {
                     text += " Give it a minute, then choose Open a session if you want a shell."
                 }
                 lines.append(text)
             } else {
-                var text = "That is all Wake does. The password was accepted and nothing "
+                var text = "That is all Wake does. Authentication succeeded and nothing "
                     + "was left open. If that Mac was waiting at the FileVault screen it is "
                     + "starting up now."
                 if !isManagedCatalog {
@@ -231,8 +236,8 @@ struct StatusPanel: View {
                 lines.append(text)
             }
             if !info.usedPassword {
-                lines.append("An SSH key was accepted, so the password you typed was never used "
-                    + "or sent.")
+                lines.append("This attempt authenticated without submitting a password. "
+                    + "No password popup was needed.")
             }
             return lines.joined(separator: "\n\n")
         case .failed(let failure):
@@ -242,7 +247,12 @@ struct StatusPanel: View {
 
     /// Idle copy when no row is selected. The empty-catalog sentence belongs
     /// only to an empty list, not to “nothing highlighted yet.”
-    static func unselectedHeadline(isManagedCatalog: Bool, assignedCount: Int) -> String {
+    static func unselectedHeadline(
+        isManagedCatalog: Bool, assignedCount: Int, fileUnavailable: Bool = false
+    ) -> String {
+        if fileUnavailable {
+            return "The saved connections file could not be opened."
+        }
         if isManagedCatalog {
             return assignedCount == 0
                 ? "Your organization has not assigned any machines."
@@ -251,7 +261,10 @@ struct StatusPanel: View {
         return "Select a connection."
     }
 
-    static func unselectedGuidance(isManagedCatalog: Bool, assignedCount: Int) -> String? {
+    static func unselectedGuidance(
+        isManagedCatalog: Bool, assignedCount: Int, fileUnavailable: Bool = false
+    ) -> String? {
+        if fileUnavailable { return nil }
         if isManagedCatalog {
             return assignedCount == 0 ? nil : "Pick one from the list to wake it."
         }

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 
@@ -5,8 +6,8 @@ import Observation
 ///
 /// A "session" here is one `ssh -M -N` master process. It authenticates once
 /// and then holds the connection open. Terminal windows attach to it through
-/// the control socket, so the password is needed exactly once and is destroyed
-/// immediately afterwards.
+/// the control socket. Password entry, when needed, belongs to the short-lived
+/// native helper, never to this model.
 @MainActor
 @Observable
 final class SSHSessionManager {
@@ -26,7 +27,7 @@ final class SSHSessionManager {
 
     struct Unlocked: Equatable {
         var at: Date
-        /// False when a key was accepted and the typed password never used.
+        /// Whether the native helper submitted a password during this attempt.
         var usedPassword: Bool
         /// True when the machine closed the connection rather than the app.
         var closedByServer: Bool
@@ -34,8 +35,7 @@ final class SSHSessionManager {
 
     struct Connected: Equatable {
         var since: Date
-        /// False when ssh authenticated with a key or agent and never asked
-        /// for the password that was typed.
+        /// Whether the native helper submitted a password during this attempt.
         var usedPassword: Bool
     }
 
@@ -74,18 +74,68 @@ final class SSHSessionManager {
     static let wakingHeadline = "Waking the machine..."
     /// Managed builds never hold a session, even if a caller asks.
     var forcesUnlock: Bool = AppDistribution.isManagedBuild
+    /// The app-lock controller owns this gate. View visibility is not authority
+    /// to connect, attach to a master, or publish an asynchronous result.
+    private(set) var isAppLocked = false
+    private var authorizationGeneration = UUID()
 
     private var sessions: [UUID: Session] = [:]
     private var attempts: [UUID: Task<Void, Never>] = [:]
+    private var attemptDirectories: [UUID: URL] = [:]
+    private var addressLookups: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
+    // Kept synchronously so normal app termination also closes attempts that
+    // have authenticated but have not yet become an established Session.
+    private var inFlight: [UUID: (process: Process, channel: AskpassChannel, log: SSHDiagnosticStream)] = [:]
+    private let wake: (String, String?) async -> Void
+    private let makeDirectory: () throws -> URL
+
+    init(wake: @escaping (String, String?) async -> Void = {
+        await NetworkWake.poke(host: $0, hardwareAddress: $1)
+    }, makeSessionDirectory: (() throws -> URL)? = nil) {
+        self.wake = wake
+        self.makeDirectory = makeSessionDirectory ?? { try Self.makeSessionDirectory() }
+    }
 
     private struct Session {
         let process: Process
         let controlPath: String
         let directoryURL: URL
         let connection: SSHConnection
+        let log: SSHDiagnosticStream
+        let monitor: Task<Void, Never>
     }
 
     var activeSessionCount: Int { sessions.count }
+
+    /// Call with true before hiding/releasing the unlocked vault; call with
+    /// false only after the app-lock controller has authenticated the user.
+    /// Unlock permits fresh work. It never revives work from before the lock.
+    func setAppLocked(_ locked: Bool) {
+        guard locked != isAppLocked else { return }
+        isAppLocked = locked
+        guard locked else { return }
+        authorizationGeneration = UUID()
+        disconnectAll()
+        for attempt in inFlight.values {
+            attempt.log.collector.suppressStorage()
+            attempt.log.close()
+        }
+        for directory in attemptDirectories.values {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        attempts.removeAll()
+        inFlight.removeAll()
+        attemptDirectories.removeAll()
+        states.removeAll()
+        diagnostics.removeAll()
+        lastActionError = nil
+        // Cancelling drops retained work as it unwinds. Swift/framework copies
+        // of connection metadata are not claimed to be physically erased.
+    }
+
+    private func isAuthorized(_ generation: UUID) -> Bool {
+        !isAppLocked && generation == authorizationGeneration
+    }
 
     func state(for id: UUID?) -> State {
         guard let id else { return .idle }
@@ -94,13 +144,12 @@ final class SSHSessionManager {
 
     // MARK: - Connecting
 
-    /// Takes ownership of `password` and wipes it when the attempt ends,
-    /// whether it succeeded, failed or was cancelled.
-    func connect(_ connection: SSHConnection, password: SecureBuffer, mode: ConnectMode) {
+    /// No password enters the main app. The verified SSH child opens the native helper.
+    func connect(_ connection: SSHConnection, mode: ConnectMode) {
+        guard !isAppLocked else { return }
         let resolvedMode = forcesUnlock ? ConnectMode.unlock : mode
         let id = connection.id
         guard attempts[id] == nil, sessions[id] == nil else {
-            password.wipe()
             return
         }
         states[id] = .connecting(
@@ -108,8 +157,9 @@ final class SSHSessionManager {
                 host: connection.host, hardwareAddress: connection.hardwareAddress)
             ? Self.wakingHeadline
             : "Starting ssh…")
+        let generation = authorizationGeneration
         attempts[id] = Task { [weak self] in
-            await self?.runAttempt(connection, password: password, mode: resolvedMode)
+            await self?.runAttempt(connection, mode: resolvedMode, generation: generation)
         }
     }
 
@@ -119,13 +169,21 @@ final class SSHSessionManager {
 
     private func runAttempt(
         _ connection: SSHConnection,
-        password: SecureBuffer,
-        mode: ConnectMode
+        mode: ConnectMode,
+        generation: UUID
     ) async {
         let id = connection.id
         defer {
-            password.wipe()
-            attempts[id] = nil
+            if generation == authorizationGeneration {
+                attempts[id] = nil
+                inFlight[id] = nil
+                attemptDirectories[id] = nil
+            }
+        }
+        guard isAuthorized(generation) else { return }
+        guard !Task.isCancelled else {
+            states[id] = .failed(Self.cancelledFailure)
+            return
         }
 
         let issues = ConnectionValidator.issues(in: connection)
@@ -141,7 +199,8 @@ final class SSHSessionManager {
         let directory: URL
         let controlPath: String
         do {
-            directory = try Self.makeSessionDirectory()
+            directory = try makeDirectory()
+            attemptDirectories[id] = directory
             controlPath = directory.appendingPathComponent("ctl", isDirectory: false).path
         } catch {
             states[id] = .failed(SSHFailure(
@@ -153,13 +212,21 @@ final class SSHSessionManager {
 
         if NetworkWake.shouldPoke(host: connection.host, hardwareAddress: connection.hardwareAddress) {
             states[id] = .connecting(stage: Self.wakingHeadline)
-            await NetworkWake.poke(host: connection.host, hardwareAddress: connection.hardwareAddress)
+            await wake(connection.host, connection.hardwareAddress)
+            guard isAuthorized(generation) else {
+                try? FileManager.default.removeItem(at: directory)
+                return
+            }
             if Task.isCancelled {
                 try? FileManager.default.removeItem(at: directory)
                 states[id] = .failed(Self.cancelledFailure)
                 return
             }
             try? await Task.sleep(nanoseconds: NetworkWake.settleNanoseconds)
+            guard isAuthorized(generation) else {
+                try? FileManager.default.removeItem(at: directory)
+                return
+            }
             if Task.isCancelled {
                 try? FileManager.default.removeItem(at: directory)
                 states[id] = .failed(Self.cancelledFailure)
@@ -169,25 +236,34 @@ final class SSHSessionManager {
 
         let channel: AskpassChannel
         let arguments: [String]
+        let log: SSHDiagnosticStream
         do {
-            channel = try AskpassChannel(password: password, helperPath: Self.askpassHelperPath)
+            log = try SSHDiagnosticStream(in: directory)
+            let trust = try HostKeyService.prepareTrustSnapshot(in: directory)
             switch mode {
             case .unlock:
                 arguments = try SSHCommandBuilder.unlockArguments(
-                    for: connection, connectTimeout: Self.connectTimeout)
+                    for: connection, connectTimeout: Self.connectTimeout,
+                    diagnosticLogPath: log.url.path, knownHostsPath: trust.path,
+                    authenticatedCallbackCommand: AskpassHelper.authenticationCommand(helperPath: Self.askpassHelperPath))
             case .session:
                 arguments = try SSHCommandBuilder.masterArguments(
-                    for: connection, controlPath: controlPath, connectTimeout: Self.connectTimeout)
+                    for: connection, controlPath: controlPath, connectTimeout: Self.connectTimeout,
+                    diagnosticLogPath: log.url.path, knownHostsPath: trust.path,
+                    authenticatedCallbackCommand: AskpassHelper.authenticationCommand(helperPath: Self.askpassHelperPath))
             }
+            channel = try AskpassChannel(context: .init(destination: connection.displayDestination,
+                action: mode.buttonTitle), directory: directory, helperPath: Self.askpassHelperPath,
+                beforePasswordEntry: { log.collector.suppressStorage() })
         } catch {
             try? FileManager.default.removeItem(at: directory)
-            states[id] = .failed(SSHFailure(
-                kind: .launchFailed,
-                headline: "ssh could not be started.",
+            states[id] = .failed(SSHFailure(kind: .launchFailed,
+                headline: "The secure connection could not be prepared.",
                 guidance: error.localizedDescription, detail: nil))
             return
         }
-        defer { channel.invalidate() }
+        var keepLog = false
+        defer { channel.invalidate(); if !keepLog { log.close() } }
 
         var environment = ProcessRunner.minimalEnvironment()
         environment.merge(channel.environmentAdditions()) { _, new in new }
@@ -195,11 +271,20 @@ final class SSHSessionManager {
         var launchesRemaining = NetworkWake.shouldPoke(
             host: connection.host, hardwareAddress: connection.hardwareAddress) ? 2 : 1
         var process = Process()
-        var errorPipe = Pipe()
-        var diagnostics = OutputCollector()
+        let diagnostics = log.collector
         var outcome: AttemptOutcome = .stillWaiting
 
         launch: while true {
+            guard isAuthorized(generation) else {
+                terminate(process)
+                try? FileManager.default.removeItem(at: directory)
+                return
+            }
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: directory)
+                states[id] = .failed(Self.cancelledFailure)
+                return
+            }
             states[id] = .connecting(stage: "Starting ssh…")
             process = Process()
             process.executableURL = URL(fileURLWithPath: SSHCommandBuilder.sshExecutable)
@@ -208,71 +293,72 @@ final class SSHSessionManager {
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = FileHandle.nullDevice
 
-            errorPipe = Pipe()
-            process.standardError = errorPipe
-            diagnostics = OutputCollector()
-            errorPipe.fileHandleForReading.readabilityHandler = { handle in
-                let data = handle.availableData
-                if data.isEmpty {
-                    handle.readabilityHandler = nil
-                } else {
-                    diagnostics.append(data)
-                }
-            }
+            // -E writes only OpenSSH's internal log into a bounded private FIFO.
+            // Server banners and prompts on stderr are discarded, not recorded.
+            process.standardError = FileHandle.nullDevice
+            diagnostics.reset()
 
             do {
                 try process.run()
+                inFlight[id] = (process, channel, log)
+                if process.isRunning { try channel.registerSSHProcess(process) }
             } catch {
-                errorPipe.fileHandleForReading.readabilityHandler = nil
+                terminate(process)
                 try? FileManager.default.removeItem(at: directory)
                 states[id] = .failed(SSHFailure(
                     kind: .launchFailed,
-                    headline: "/usr/bin/ssh could not be launched.",
+                    headline: "/usr/bin/ssh could not be launched securely.",
                     guidance: error.localizedDescription, detail: nil))
                 return
             }
 
             states[id] = .connecting(stage: "Authenticating…")
-            let deadline = Date().addingTimeInterval(Self.overallTimeout)
+            let started = ProcessInfo.processInfo.systemUptime
             outcome = .stillWaiting
 
             while outcome == .stillWaiting {
-                if Task.isCancelled {
+                if !isAuthorized(generation) || Task.isCancelled || channel.outcome.cancelled {
                     outcome = .cancelled
                     break
                 }
-                if mode == .unlock,
-                   SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text) {
-                    outcome = .authenticated
-                    break
-                }
-                if mode == .session, FileManager.default.fileExists(atPath: controlPath) {
+                if channel.outcome.authenticated {
                     outcome = .authenticated
                     break
                 }
                 if !process.isRunning {
-                    outcome = SSHOutputClassifier.indicatesAuthenticationSucceeded(diagnostics.text)
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    outcome = channel.outcome.authenticated
                         ? .authenticated : .exited
                     break
                 }
-                if Date() >= deadline {
+                let promptDeadline = channel.outcome.promptedAt.map { $0 + AskpassProtocol.promptLifetime } ?? 0
+                let deadline = max(started + Self.overallTimeout, promptDeadline)
+                if ProcessInfo.processInfo.systemUptime >= deadline || diagnostics.exceededLimit {
                     outcome = .timedOut
                     break
                 }
                 try? await Task.sleep(nanoseconds: 150_000_000)
             }
 
+            guard isAuthorized(generation) else {
+                terminate(process)
+                try? FileManager.default.removeItem(at: directory)
+                return
+            }
+
             let canRetry = launchesRemaining > 1
-                && !channel.outcome.served
+                && channel.outcome.promptedAt == nil
                 && Self.shouldRetryAfterWake(outcome, output: diagnostics.text)
             launchesRemaining -= 1
             if canRetry {
                 terminate(process)
-                errorPipe.fileHandleForReading.readabilityHandler = nil
                 states[id] = .connecting(stage: Self.wakingHeadline)
-                await NetworkWake.poke(
-                    host: connection.host, hardwareAddress: connection.hardwareAddress)
-                if Task.isCancelled {
+                await wake(connection.host, connection.hardwareAddress)
+                guard isAuthorized(generation) else {
+                    try? FileManager.default.removeItem(at: directory)
+                    return
+                }
+                if Task.isCancelled || channel.outcome.cancelled {
                     try? FileManager.default.removeItem(at: directory)
                     record(connection, mode: mode, result: "Cancelled",
                            channel: channel.outcome, output: diagnostics.text)
@@ -280,7 +366,11 @@ final class SSHSessionManager {
                     return
                 }
                 try? await Task.sleep(nanoseconds: NetworkWake.settleNanoseconds)
-                if Task.isCancelled {
+                guard isAuthorized(generation) else {
+                    try? FileManager.default.removeItem(at: directory)
+                    return
+                }
+                if Task.isCancelled || channel.outcome.cancelled {
                     try? FileManager.default.removeItem(at: directory)
                     record(connection, mode: mode, result: "Cancelled",
                            channel: channel.outcome, output: diagnostics.text)
@@ -297,26 +387,24 @@ final class SSHSessionManager {
             break
         case .cancelled:
             terminate(process)
-            errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
             record(connection, mode: mode, result: "Cancelled",
                    channel: channel.outcome, output: diagnostics.text)
             states[id] = .failed(SSHFailure(
                 kind: .cancelled,
                 headline: "Connection cancelled.",
-                guidance: "Nothing was left running and the password was discarded.", detail: nil))
+                guidance: "The SSH attempt was stopped and its password helper was closed.", detail: nil))
             return
         case .timedOut:
             terminate(process)
-            errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
             var failure = SSHOutputClassifier.classify(exitCode: -1, standardError: diagnostics.text)
             if failure.kind == .unknown {
                 failure = SSHFailure(
                     kind: .timeout,
                     headline: "The connection timed out.",
-                    guidance: "ssh did not finish authenticating within \(Int(Self.overallTimeout)) seconds.",
-                    detail: diagnostics.text.isEmpty ? nil : diagnostics.text)
+                    guidance: "ssh did not finish authenticating within the allowed time or exceeded the diagnostic output limit.",
+                    detail: nil)
             }
             record(connection, mode: mode, result: failure.headline,
                    channel: channel.outcome, output: diagnostics.text)
@@ -325,8 +413,8 @@ final class SSHSessionManager {
         case .exited:
             // Give the reader a moment to drain the last of stderr.
             try? await Task.sleep(nanoseconds: 200_000_000)
-            errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
+            guard isAuthorized(generation) else { return }
 
             let outcome = channel.outcome
             var failure = SSHOutputClassifier.classify(
@@ -346,11 +434,10 @@ final class SSHSessionManager {
 
         if mode == .unlock {
             terminate(process)
-            errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
             record(connection, mode: mode, result: "Logged in, then closed as asked",
                    channel: channel.outcome, output: diagnostics.text)
-            rememberLinkAddress(of: connection)
+            rememberLinkAddress(of: connection, generation: generation)
             states[id] = .unlocked(
                 Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: false))
             return
@@ -360,11 +447,10 @@ final class SSHSessionManager {
             // A session was asked for, but the far end hung up right after
             // accepting the password. That is what unlocking a disk looks like,
             // so it is reported as a success rather than a failure.
-            errorPipe.fileHandleForReading.readabilityHandler = nil
             try? FileManager.default.removeItem(at: directory)
             record(connection, mode: mode, result: "Logged in, then the machine closed it",
                    channel: channel.outcome, output: diagnostics.text)
-            rememberLinkAddress(of: connection)
+            rememberLinkAddress(of: connection, generation: generation)
             states[id] = .unlocked(
                 Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: true))
             return
@@ -378,33 +464,51 @@ final class SSHSessionManager {
                 for: connection, controlPath: controlPath, command: "check"),
             timeout: 10)
 
-        guard let check, check.exitCode == 0 else {
+        guard isAuthorized(generation) else {
             terminate(process)
-            errorPipe.fileHandleForReading.readabilityHandler = nil
+            try? FileManager.default.removeItem(at: directory)
+            return
+        }
+        if Task.isCancelled {
+            terminate(process)
+            try? FileManager.default.removeItem(at: directory)
+            states[id] = .failed(Self.cancelledFailure)
+            return
+        }
+        guard let check, check.exitCode == 0, !check.outputLimitExceeded else {
+            terminate(process)
             try? FileManager.default.removeItem(at: directory)
             states[id] = .failed(SSHFailure(
                 kind: .unknown,
                 headline: "The session could not be verified.",
                 guidance: "ssh authenticated but the control socket did not answer.",
-                detail: [diagnostics.text, check?.standardError]
-                    .compactMap { $0 }
-                    .filter { !$0.isEmpty }
-                    .joined(separator: "\n")))
+                detail: nil))
             return
         }
 
         record(connection, mode: mode, result: "Connected",
                channel: channel.outcome, output: diagnostics.text)
-        rememberLinkAddress(of: connection)
-        errorPipe.fileHandleForReading.readabilityHandler = nil
-        sessions[id] = Session(
-            process: process, controlPath: controlPath, directoryURL: directory, connection: connection)
+        rememberLinkAddress(of: connection, generation: generation)
+        keepLog = true
+        let master = process
+        let monitor = Task { [weak self] in
+            while !Task.isCancelled && master.isRunning {
+                guard self?.isAuthorized(generation) == true,
+                      self?.sessions[id]?.process === master else { return }
+                if diagnostics.exceededLimit { self?.disconnect(id); break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+        sessions[id] = Session(process: process, controlPath: controlPath, directoryURL: directory,
+            connection: connection, log: log, monitor: monitor)
         states[id] = .connected(Connected(since: Date(), usedPassword: usedPassword))
 
-        process.terminationHandler = { [weak self] _ in
-            Task { @MainActor [weak self] in self?.masterExited(id) }
+        process.terminationHandler = { [weak self] process in
+            Task { @MainActor [weak self] in
+                self?.masterExited(id, process: process, generation: generation)
+            }
         }
-        if !process.isRunning { masterExited(id) }
+        if !process.isRunning { masterExited(id, process: process, generation: generation) }
     }
 
     /// Attempts recorded for one saved connection, newest first.
@@ -451,17 +555,28 @@ final class SSHSessionManager {
     func disconnect(_ id: UUID) {
         guard let session = sessions.removeValue(forKey: id) else { return }
         states[id] = .idle
+        session.monitor.cancel()
+        session.log.collector.suppressStorage()
+        session.log.close()
         terminate(session.process)
         try? FileManager.default.removeItem(at: session.directoryURL)
     }
 
     func disconnectAll() {
-        for id in sessions.keys { disconnect(id) }
+        for task in attempts.values { task.cancel() }
+        for lookup in addressLookups.values { lookup.task.cancel() }
+        addressLookups.removeAll()
+        for attempt in inFlight.values {
+            attempt.channel.invalidate()
+            terminate(attempt.process)
+        }
+        for id in Array(sessions.keys) { disconnect(id) }
     }
 
     /// Hands the already-authenticated session to Terminal. No password is
     /// involved: the new ssh client attaches to the existing master.
     func openInTerminal(_ id: UUID) {
+        guard !isAppLocked else { return }
         guard !forcesUnlock else {
             lastActionError = "This copy of SSH-Wakey cannot open a session."
             return
@@ -485,9 +600,12 @@ final class SSHSessionManager {
     /// A session that ends on its own, rather than because Disconnect was
     /// pressed. Worth distinguishing, because a very short one is what a Mac
     /// unlocking its data volume looks like.
-    private func masterExited(_ id: UUID) {
-        guard let session = sessions[id] else { return }
+    private func masterExited(_ id: UUID, process: Process, generation: UUID) {
+        guard isAuthorized(generation), let session = sessions[id],
+              session.process === process else { return }
         sessions.removeValue(forKey: id)
+        session.monitor.cancel()
+        session.log.close()
         try? FileManager.default.removeItem(at: session.directoryURL)
         guard case .connected(let info) = states[id] else { return }
 
@@ -508,11 +626,8 @@ final class SSHSessionManager {
         guard process.isRunning else { return }
         process.terminationHandler = nil
         process.terminate()
-        let identifier = process.processIdentifier
-        Task.detached {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if identifier > 0 { kill(identifier, SIGKILL) }
-        }
+        // Only the known Apple SSH process is used here. Do not schedule a
+        // later raw-PID kill after Foundation may have reaped/reused its PID.
     }
 
     // MARK: - Helpers
@@ -520,7 +635,7 @@ final class SSHSessionManager {
     static let cancelledFailure = SSHFailure(
         kind: .cancelled,
         headline: "Connection cancelled.",
-        guidance: "Nothing was left running and the password was discarded.", detail: nil)
+        guidance: "The SSH attempt was stopped and its password helper was closed.", detail: nil)
 
     /// TCP never completed, so a wake poke and a second ssh are worth trying.
     /// Connection refused is not: the machine already answered.
@@ -536,13 +651,22 @@ final class SSHSessionManager {
         }
     }
 
-    private func rememberLinkAddress(of connection: SSHConnection) {
+    private func rememberLinkAddress(of connection: SSHConnection, generation: UUID) {
+        guard isAuthorized(generation) else { return }
         let id = connection.id
         let host = connection.host
-        Task {
+        let token = UUID()
+        addressLookups[id]?.task.cancel()
+        let task = Task { [weak self] in
+            defer {
+                if self?.addressLookups[id]?.token == token { self?.addressLookups[id] = nil }
+            }
+            guard !Task.isCancelled, self?.isAuthorized(generation) == true else { return }
             guard let mac = await NetworkWake.learnedAddress(for: host) else { return }
-            await MainActor.run { self.onLearnedLinkAddress?(id, mac) }
+            guard !Task.isCancelled, self?.isAuthorized(generation) == true else { return }
+            self?.onLearnedLinkAddress?(id, mac)
         }
+        addressLookups[id] = (token, task)
     }
 
     /// Adds what the password channel saw to a failure message.
@@ -556,6 +680,7 @@ final class SSHSessionManager {
         host: String? = nil
     ) -> SSHFailure {
         var failure = failure
+        failure.detail = nil
         var notes: [String] = []
 
         // A machine on the local network that cannot be reached at all is the
@@ -572,9 +697,10 @@ final class SSHSessionManager {
         }
 
         if outcome.repeatedPrompts > 0 {
-            notes.append("ssh asked the same question it had already been answered. That goes "
+            notes.append("ssh asked for the password again after it had already been given once. "
+                + "SSH-Wakey answers a single password prompt per attempt and left the rest "
                 + "unanswered, because repeating a password that has just been rejected only "
-                + "produces more failed logins.")
+                + "produces more failed logins. Press Connect to try again.")
         }
         for prompt in outcome.refusedPrompts where !prompt.isEmpty {
             notes.append("This prompt went unanswered because it is not a password prompt: \(prompt)")
@@ -594,9 +720,9 @@ final class SSHSessionManager {
         return annotated
     }
 
-    /// The executable ssh will run as its askpass helper: this very binary.
+    /// Only the embedded signed adapter can launch the sandboxed password UI.
     static var askpassHelperPath: String {
-        Bundle.main.executablePath ?? CommandLine.arguments.first ?? "/usr/bin/false"
+        HelperLayout.adapterPath
     }
 
     static let ownerFileName = "owner"
@@ -612,21 +738,24 @@ final class SSHSessionManager {
     ///
     /// A directory whose owning process is still alive belongs to another
     /// running copy of the app and is left alone.
-    static func sweepAbandonedSessions() async {
-        let parent = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("SSH-Wakey", isDirectory: true)
+    static func sweepAbandonedSessions(in parent: URL) async {
+        // An explicit root is required; tests must never sweep real sessions.
+        guard (try? ProtectedFile.createPrivateDirectory(at: parent)) != nil else { return }
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: parent, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
 
         for entry in entries where isAbandoned(entry) {
             let control = entry.appendingPathComponent("ctl")
-            if FileManager.default.fileExists(atPath: control.path) {
+            var controlInfo = stat()
+            if lstat(control.path, &controlInfo) == 0,
+               controlInfo.st_mode & S_IFMT == S_IFSOCK,
+               controlInfo.st_uid == getuid(), controlInfo.st_mode & 0o077 == 0 {
                 // ssh looks at the control socket before the destination, so
                 // the name here is only a placeholder.
                 _ = try? await ProcessRunner.run(
                     executable: SSHCommandBuilder.sshExecutable,
-                    arguments: ["-o", "ControlPath=\(control.path)", "-O", "exit",
-                                "abandoned-session"],
+                    arguments: SSHCommandBuilder.abandonedControlArguments(
+                        controlPath: control.path),
                     timeout: 5)
             }
             try? FileManager.default.removeItem(at: entry)
@@ -634,49 +763,116 @@ final class SSHSessionManager {
     }
 
     static func isAbandoned(_ directory: URL) -> Bool {
+        var info = stat()
+        guard lstat(directory.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+              info.st_uid == getuid(), info.st_mode & 0o077 == 0 else { return false }
         let owner = directory.appendingPathComponent(ownerFileName)
-        guard let text = try? String(contentsOf: owner, encoding: .utf8),
-              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            // No owner recorded: a password-channel folder, or one from an
-            // older build. Only cleared once it is old enough that it cannot
-            // belong to an attempt happening right now.
-            let age = (try? directory.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate.map { Date().timeIntervalSince($0) }
-            return (age ?? 0) > 3600
+        let data: Data?
+        do { data = try ProtectedFile.read(from: owner, maximumBytes: 4096) }
+        catch { return false }
+        if let data {
+            if let identity = try? JSONDecoder().decode(ProcessIdentity.self, from: data) {
+                return !identity.isCurrent
+            }
+            // Older versions stored just the PID. Treat an existing/reused PID
+            // conservatively; only its verified absence permits cleanup.
+            guard let text = String(data: data, encoding: .utf8),
+                  let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 0 else {
+                return false
+            }
+            return kill(pid, 0) != 0 && errno == ESRCH
         }
-        if pid == getpid() { return false }
-        // Alive means another copy of the app owns it. EPERM also means alive.
-        return kill(pid, 0) != 0 && errno == ESRCH
+        return Date().timeIntervalSince1970 - TimeInterval(info.st_mtimespec.tv_sec) > 3600
     }
+
+    static let temporaryRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        .resolvingSymlinksInPath().appendingPathComponent("SSH-Wakey", isDirectory: true)
 
     private static func makeSessionDirectory() throws -> URL {
-        let parent = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("SSH-Wakey", isDirectory: true)
-        let directory = parent.appendingPathComponent("s-\(UUID().uuidString.prefix(8))", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: parent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-
-        // Records which app process owns this, so a later launch can tell a
-        // session abandoned by a crash from one belonging to a running copy.
-        try? Data(String(getpid()).utf8)
-            .write(to: directory.appendingPathComponent(ownerFileName))
+        try ProtectedFile.createPrivateDirectory(at: temporaryRoot)
+        let directory = temporaryRoot.appendingPathComponent("s-\(UUID().uuidString.prefix(12))", isDirectory: true)
+        try ProtectedFile.createPrivateDirectory(at: directory)
+        guard let identity = ProcessIdentity.read(getpid()) else { throw AskpassError.invalidProcess }
+        try ProtectedFile.write(JSONEncoder().encode(identity), to: directory.appendingPathComponent(ownerFileName))
         return directory
     }
+
 }
 
-/// Thread-safe accumulator for a pipe that is read on a background queue.
+/// Bounded transient internal SSH log. No raw output is retained in history.
 final class OutputCollector: @unchecked Sendable {
+    static let maximumBytes = 65_536
     private let lock = NSLock()
     private var data = Data()
+    private var overflow = false
+    private var discarding = false
+    private var total = 0
 
-    func append(_ chunk: Data) {
-        lock.lock(); data.append(chunk); lock.unlock()
-    }
-
-    var text: String {
+    func append(_ chunk: Data) { chunk.withUnsafeBytes { append($0) } }
+    func append(_ chunk: UnsafeRawBufferPointer) {
         lock.lock(); defer { lock.unlock() }
-        return String(decoding: data, as: UTF8.self)
+        let available = Self.maximumBytes - total
+        if !discarding { data.append(contentsOf: chunk.prefix(available)) }
+        total += min(chunk.count, available)
+        if chunk.count > available { overflow = true }
     }
+    func reset() {
+        lock.lock(); defer { lock.unlock() }
+        data.resetBytes(in: 0..<data.count)
+        data.removeAll(keepingCapacity: false)
+        overflow = false; total = 0; discarding = false
+    }
+    func suppressStorage() {
+        lock.lock(); defer { lock.unlock() }
+        discarding = true
+        data.resetBytes(in: 0..<data.count)
+        data.removeAll(keepingCapacity: false)
+    }
+    var exceededLimit: Bool { lock.lock(); defer { lock.unlock() }; return overflow }
+    var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
+}
+
+/// A private FIFO separates OpenSSH's internal log from remote banners on stderr.
+/// It never writes log text to a regular file. The reader remains active for a
+/// live master; overflow terminates that session instead of growing memory/disk.
+final class SSHDiagnosticStream: @unchecked Sendable {
+    let url: URL
+    let collector = OutputCollector()
+    private let reader: DispatchSourceRead
+    private let lock = NSLock()
+    private var closed = false
+
+    init(in directory: URL) throws {
+        url = directory.appendingPathComponent("log")
+        guard mkfifo(url.path, 0o600) == 0 else { throw AskpassError.socketCreationFailed }
+        let fd = open(url.path, O_RDWR | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { unlink(url.path); throw AskpassError.socketCreationFailed }
+        reader = DispatchSource.makeReadSource(fileDescriptor: fd,
+            queue: DispatchQueue(label: "com.CadenGithubB.sshwakey.internal-log"))
+        let output = collector
+        reader.setEventHandler {
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            for _ in 0..<16 {
+                let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+                if count > 0 {
+                    buffer.withUnsafeMutableBytes { bytes in
+                        output.append(UnsafeRawBufferPointer(rebasing: bytes[..<count]))
+                        _ = memset_s(bytes.baseAddress, bytes.count, 0, bytes.count)
+                    }
+                }
+                else if count < 0 && errno == EINTR { continue }
+                else { break }
+            }
+        }
+        reader.setCancelHandler { Darwin.close(fd) }
+        reader.resume()
+    }
+    func close() {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed else { return }
+        closed = true
+        reader.cancel()
+        unlink(url.path)
+    }
+    deinit { collector.suppressStorage(); close() }
 }

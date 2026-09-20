@@ -1,52 +1,30 @@
 #!/bin/sh
-#
-# Builds a disk image for the public Standard app.
-#
-# Writes build/SSH-Wakey.dmg
-#
-# The IT copy is a different scheme in this same project:
-#   ./Scripts/make-dmg-managed.sh
-#
-# Read this before using it on someone else's machine: the app is signed
-# ad-hoc, not with a Developer ID, and it is not notarised. On the Mac that
-# built it that is fine. Anywhere else, macOS attaches a quarantine flag to
-# anything that arrives by download or AirDrop, and Gatekeeper refuses an
-# ad-hoc signed app outright. The person receiving it has to either
-# right-click the app and choose Open, or run:
-#
-#     xattr -d com.apple.quarantine /Applications/SSH-Wakey.app
-#
-# Telling people to bypass Gatekeeper is a bad habit to teach. If you want to
-# hand this to anyone else, sign it with a Developer ID and notarise it instead.
-
+# Build a verified local Standard app image. Distribution still needs Developer ID
+# signing and notarization; do not ask recipients to bypass Gatekeeper.
 set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+cd -P "$(dirname "$0")/.."
+. ./Scripts/release-common.sh
+check_build_paths Release SSH-Wakey.app
+[ ! -L build/SSH-Wakey.dmg ] || fail 'Refusing linked disk image destination.'
+[ ! -d build/SSH-Wakey.dmg ] || fail 'Disk image destination is a directory.'
 
-cd "$(dirname "$0")/.."
-
-echo "Building Release…"
-xcodebuild \
-    -project SSH-Wakey.xcodeproj \
-    -scheme SSH-Wakey \
-    -configuration Release \
-    -derivedDataPath build \
-    build >/dev/null
-
-BUILT="build/Build/Products/Release/SSH-Wakey.app"
-[ -d "$BUILT" ] || { echo "Build produced no app at $BUILT" >&2; exit 1; }
-
-STAGING="build/dmg"
-rm -rf "$STAGING" "build/SSH-Wakey.dmg"
-mkdir -p "$STAGING"
-/usr/bin/ditto "$BUILT" "$STAGING/SSH-Wakey.app"
-ln -s /Applications "$STAGING/Applications"
-
-hdiutil create \
-    -volname "SSH-Wakey" \
-    -srcfolder "$STAGING" \
-    -ov -format UDZO \
-    "build/SSH-Wakey.dmg" >/dev/null
-
-rm -rf "$STAGING"
-echo
-echo "Wrote build/SSH-Wakey.dmg"
-echo "Drag the app onto Applications after opening it."
+echo 'Building Release…'
+/usr/bin/xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey \
+    -configuration Release -derivedDataPath build build >/dev/null
+BUILT=build/Build/Products/Release/SSH-Wakey.app
+verify_release_bundle "$BUILT" com.CadenGithubB.sshwakey SSH-Wakey
+WORK=$(/usr/bin/mktemp -d build/.SSH-Wakey-dmg.XXXXXX)
+trap '/bin/rm -rf "$WORK"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+/bin/mkdir "$WORK/staging"
+/usr/bin/ditto "$BUILT" "$WORK/staging/SSH-Wakey.app"
+verify_release_bundle "$WORK/staging/SSH-Wakey.app" com.CadenGithubB.sshwakey SSH-Wakey
+/bin/ln -s /Applications "$WORK/staging/Applications"
+/usr/bin/hdiutil create -volname SSH-Wakey -srcfolder "$WORK/staging" \
+    -format UDZO "$WORK/image.dmg" >/dev/null
+[ ! -L build/SSH-Wakey.dmg ] || fail 'Refusing linked disk image destination.'
+/bin/mv -f "$WORK/image.dmg" build/SSH-Wakey.dmg
+echo 'Wrote build/SSH-Wakey.dmg (ad-hoc signed, not notarized).'

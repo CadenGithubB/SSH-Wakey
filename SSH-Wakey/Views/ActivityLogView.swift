@@ -19,7 +19,7 @@ struct ActivityLogView: View {
                 Text("Activity for \(connection.name)")
                     .font(.headline)
                 Text("Connection attempts since SSH-Wakey was opened. Hostnames and usernames "
-                     + "may appear here; passwords never do.")
+                     + "appear here. Raw SSH output and server prompts are excluded.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -96,21 +96,6 @@ struct ActivityLogView: View {
                     labeled("Destination", entry.destination)
                     labeled("Password channel", entry.channel)
 
-                    Text("ssh output")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-
-                    let output = entry.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    ScrollView {
-                        Text(output.isEmpty ? "(ssh printed nothing)" : output)
-                            .font(.system(size: 11, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    }
-                    .frame(maxHeight: 140)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
                 }
                 .padding(.top, 2)
             }

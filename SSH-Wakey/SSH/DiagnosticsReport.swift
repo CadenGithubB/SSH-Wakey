@@ -3,9 +3,9 @@ import Foundation
 /// One connection attempt, kept so it can be written out afterwards when
 /// something needs explaining.
 ///
-/// The ssh output is what ssh itself printed. It carries hostnames, usernames
-/// and key fingerprints, and no password: the password is never on the command
-/// line ssh was given and never appears in its output.
+/// Retains application-generated summaries only. SSH banners, errors and
+/// interactive prompts can contain anything supplied by a server, including a
+/// reflected password, so raw output must never become a lasting diagnostic.
 struct DiagnosticEntry: Identifiable, Sendable {
     let id = UUID()
     var at: Date
@@ -16,7 +16,19 @@ struct DiagnosticEntry: Identifiable, Sendable {
     var mode: String
     var result: String
     var channel: String
-    var output: String
+
+    init(at: Date, connectionID: UUID, connection: String, destination: String,
+         mode: String, result: String, channel: String, output: String = "") {
+        self.at = at
+        self.connectionID = connectionID
+        self.connection = connection
+        self.destination = destination
+        self.mode = mode
+        self.result = result
+        self.channel = channel
+        // Deliberately discard output; retained for source compatibility with
+        // callers that also use transient SSH output to classify a failure.
+    }
 }
 
 /// Renders recent attempts as something that can be read, saved and sent on.
@@ -50,10 +62,10 @@ enum DiagnosticsReport {
         lines.append("SSH-Wakey diagnostics")
         lines.append("Written \(stamp(now))")
         lines.append("")
-        lines.append("Read this before sending it anywhere. It lists the hostnames, usernames and")
-        lines.append("host key fingerprints of the machines you connected to. It contains no")
-        lines.append("passwords: the password is never placed on a command line and never appears")
-        lines.append("in ssh's output.")
+        lines.append("Read this before sending it anywhere. It lists saved connection names,")
+        lines.append("hostnames, usernames and application-generated results. Raw SSH output and")
+        lines.append("server prompts are excluded because a server can return sensitive text.")
+        lines.append("Passwords are not intentionally recorded. Review saved names before sharing.")
         lines.append("")
         lines.append(String(repeating: "─", count: 64))
         lines.append(field("App", "\(version()) (\(configuration()))"))
@@ -79,15 +91,6 @@ enum DiagnosticsReport {
             lines.append(field("Result", entry.result))
             lines.append(field("Password channel", entry.channel))
             lines.append("")
-            lines.append("ssh output")
-            let output = entry.output.trimmingCharacters(in: .whitespacesAndNewlines)
-            if output.isEmpty {
-                lines.append("    (ssh printed nothing)")
-            } else {
-                lines.append(contentsOf: output.split(separator: "\n", omittingEmptySubsequences: false)
-                    .map { "    " + $0 })
-            }
-            lines.append("")
         }
 
         return lines.joined(separator: "\n") + "\n"
@@ -103,7 +106,11 @@ enum DiagnosticsReport {
     }
 
     private static func field(_ label: String, _ value: String) -> String {
-        label.padding(toLength: max(18, label.count + 1), withPad: " ", startingAt: 0) + value
+        // Keep user-defined labels from injecting additional report fields or
+        // terminal control sequences when someone opens the exported file.
+        let safe = String(String.UnicodeScalarView(value.unicodeScalars.prefix(1024)
+            .filter { !CharacterSet.controlCharacters.contains($0) }))
+        return label.padding(toLength: max(18, label.count + 1), withPad: " ", startingAt: 0) + safe
     }
 
     private static func stamp(_ date: Date) -> String {

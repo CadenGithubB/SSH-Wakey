@@ -27,23 +27,24 @@ final class DiagnosticsReportTests: XCTestCase {
         let text = report([entry()])
         let preamble = text.prefix(500)
         XCTAssertTrue(preamble.contains("Read this before sending it anywhere"), String(preamble))
-        XCTAssertTrue(preamble.contains("no"), String(preamble))
-        XCTAssertTrue(preamble.contains("password"), String(preamble))
+        XCTAssertTrue(preamble.contains("Raw SSH output"), String(preamble))
+        XCTAssertTrue(preamble.contains("excluded"), String(preamble))
     }
 
     func testItCarriesWhatIsNeededToDiagnoseAFailure() {
         let text = report([entry()])
         for expected in ["Studio Mac", "admin@10.0.0.4", "Authentication failed.",
-                         "answered a password prompt", "debug1: Authenticated to 10.0.0.4"] {
+                         "answered a password prompt"] {
             XCTAssertTrue(text.contains(expected), expected)
         }
+        XCTAssertFalse(text.contains("debug1: Authenticated"))
     }
 
-    /// The password never reaches ssh's output, but the file is the one thing a
-    /// person might send to a stranger, so it is worth asserting.
-    func testAPasswordCouldNotSurviveIntoTheFile() {
-        let text = report([entry(output: "debug1: Next authentication method: password")])
+    /// A hostile server can reflect a received password in later output.
+    func testAReflectedPasswordAndForgedDiagnosticsAreNotRetained() {
+        let text = report([entry(output: "Banner: \(secret)\ndebug1: Authenticated to attacker")])
         XCTAssertFalse(text.contains(secret))
+        XCTAssertFalse(text.contains("Authenticated to attacker"))
     }
 
     func testItSaysSoWhenThereIsNothingToReport() {
@@ -64,8 +65,17 @@ final class DiagnosticsReportTests: XCTestCase {
                       "the most recent attempt is the one being looked at")
     }
 
-    func testOutputThatIsMissingIsSaidRatherThanLeftBlank() {
-        XCTAssertTrue(report([entry(output: "   ")]).contains("ssh printed nothing"))
+    func testRawOutputIsNotAStoredProperty() {
+        let retained = entry(output: secret)
+        XCTAssertFalse(Mirror(reflecting: retained).children.contains { $0.label == "output" })
+    }
+
+    func testAConnectionNameCannotInjectReportLinesOrTerminalControls() {
+        var attempt = entry()
+        attempt.connection = "name\nResult\tforged\u{1b}[31m"
+        let text = report([attempt])
+        XCTAssertFalse(text.contains("\nResult\tforged"))
+        XCTAssertFalse(text.contains("\u{1b}"))
     }
 
     func testTheFileNameCarriesTheDate() {
@@ -82,13 +92,13 @@ final class DiagnosticsReportTests: XCTestCase {
         outcome.refusedPrompts = ["Verification code:"]
 
         let summary = outcome.summary
-        XCTAssertTrue(summary.contains("answered a password prompt"), summary)
+        XCTAssertTrue(summary.contains("password submitted by the native helper"), summary)
         XCTAssertTrue(summary.contains("repeated prompt refused"), summary)
-        XCTAssertTrue(summary.contains("Verification code:"), summary)
+        XCTAssertFalse(summary.contains("Verification code:"), summary)
     }
 
     func testAnAttemptThatNeverNeededThePasswordSaysSo() {
-        XCTAssertEqual(AskpassChannel.Outcome().summary, "never asked")
+        XCTAssertEqual(AskpassChannel.Outcome().summary, "no password submitted")
     }
 
     func testEntriesForOneConnectionAreNewestFirstAndIgnoreTheOthers() {

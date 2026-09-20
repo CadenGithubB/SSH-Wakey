@@ -2,359 +2,414 @@ import Darwin
 import XCTest
 @testable import SSH_Wakey
 
-/// Exercises the password path end to end, in process: the app's channel on one
-/// side and the real askpass client code on the other.
+/// The app channel carries authorization metadata only. Ordinary runs display no
+/// password popup. The explicit manual UI audit also uses only synthetic data;
+/// no test uses real credentials or connects to a network destination.
 final class PasswordChannelTests: XCTestCase {
+    private var directory: URL!
+    private var channels: [AskpassChannel] = []
+    private let context = AskpassProtocol.Context(destination: "test-user@audit.invalid", action: "Wake")
 
-    private let secret = "correct horse battery staple"
-
-    private func socketPath(of channel: AskpassChannel) throws -> String {
-        let environment = channel.environmentAdditions()
-        return try XCTUnwrap(environment[AskpassProtocol.socketEnvironmentKey])
+    override func setUpWithError() throws {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .resolvingSymlinksInPath().appendingPathComponent("apT-\(UUID().uuidString.prefix(8))")
+        try ProtectedFile.createPrivateDirectory(at: directory)
+    }
+    override func tearDownWithError() throws {
+        channels.forEach { $0.invalidate() }
+        channels = []
+        try? FileManager.default.removeItem(at: directory)
+    }
+    private func makeChannel() throws -> AskpassChannel {
+        let child = directory.appendingPathComponent(String(channels.count))
+        let channel = try AskpassChannel(context: context, directory: child)
+        channels.append(channel)
+        return channel
+    }
+    private func identity(pid: pid_t, parent: pid_t, path: String, uid: uid_t = getuid(),
+                          started: UInt64 = 1) -> ProcessIdentity {
+        ProcessIdentity(pid: pid, parent: parent, uid: uid,
+                        startedSeconds: started, startedMicroseconds: 0, path: path)
     }
 
-    /// Runs the client half off the main thread, which is where ssh would run it.
-    private func ask(
-        socket: String, nonce: String, prompt: String, timeout: TimeInterval = 5
-    ) -> [UInt8]? {
-        let finished = expectation(description: "askpass client finished")
-        let box = ResultBox()
-        DispatchQueue.global().async {
-            box.value = AskpassHelper.fetch(
-                AskpassHelper.Request(socketPath: socket, nonce: nonce, prompt: prompt))
-            finished.fulfill()
+    func testOnlyTheExpectedSSHChildAndItsDirectHelperSatisfyTheRelationship() {
+        let ssh = identity(pid: 20, parent: 10, path: "/usr/bin/ssh")
+        let helper = identity(pid: 30, parent: 20, path: "/app/SSH-Wakey")
+        XCTAssertTrue(AskpassChannel.isExpectedHelper(helper, ssh: ssh, appPID: 10, helperPath: helper.path))
+        let attacker = identity(pid: 31, parent: 99, path: helper.path)
+        XCTAssertFalse(AskpassChannel.isExpectedHelper(attacker, ssh: ssh, appPID: 10, helperPath: helper.path))
+    }
+    func testTheRightExecutableWithAReplayedEnvironmentIsNotEnough() {
+        let ssh = identity(pid: 20, parent: 10, path: "/usr/bin/ssh")
+        let replay = identity(pid: 30, parent: 10, path: "/app/SSH-Wakey")
+        XCTAssertFalse(AskpassChannel.isExpectedHelper(replay, ssh: ssh, appPID: 10, helperPath: replay.path))
+    }
+    func testWrongUserOrSSHOwnerIsRejected() {
+        let helper = identity(pid: 30, parent: 20, path: "/app/SSH-Wakey")
+        let wrongUser = identity(pid: 20, parent: 10, path: "/usr/bin/ssh", uid: getuid() + 1)
+        let wrongParent = identity(pid: 20, parent: 99, path: "/usr/bin/ssh")
+        for ssh in [wrongUser, wrongParent] {
+            XCTAssertFalse(AskpassChannel.isExpectedHelper(helper, ssh: ssh, appPID: 10, helperPath: helper.path))
         }
-        wait(for: [finished], timeout: timeout)
-        return box.value.flatMap { buffer in buffer.withBytes { Array($0) } }
     }
-
-    private final class ResultBox: @unchecked Sendable {
-        var value: SecureBuffer?
+    func testAnotherExecutableCannotStandInForAppleSSH() {
+        let ssh = identity(pid: 20, parent: 10, path: "/tmp/ssh")
+        let helper = identity(pid: 30, parent: 20, path: "/app/SSH-Wakey")
+        XCTAssertFalse(AskpassChannel.isExpectedHelper(helper, ssh: ssh, appPID: 10, helperPath: helper.path))
+        XCTAssertFalse(ssh.isAppleSSH)
     }
-
-    func testTheChannelHandsThePasswordToAValidRequest() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        defer { channel.invalidate() }
-
-        let answer = ask(
-            socket: try socketPath(of: channel),
-            nonce: channel.nonce,
-            prompt: "admin@10.0.0.4's password: ")
-
-        XCTAssertEqual(String(decoding: try XCTUnwrap(answer), as: UTF8.self), secret + "\n")
-        XCTAssertTrue(channel.outcome.served)
-        XCTAssertEqual(channel.outcome.repeatedPrompts, 0)
+    func testKernelIdentityIncludesStartTimeAndCorrectParent() throws {
+        let current = try XCTUnwrap(ProcessIdentity.read(getpid()))
+        XCTAssertEqual(current.parent, getppid())
+        XCTAssertEqual(current.uid, getuid())
+        XCTAssertTrue(current.isCurrent)
+        let stale = identity(pid: current.pid, parent: current.parent, path: current.path,
+                             started: current.startedSeconds + 1)
+        XCTAssertFalse(stale.isCurrent)
+        XCTAssertNil(ProcessIdentity.read(0))
+        XCTAssertNil(ProcessIdentity.read(-1))
     }
-
-    func testAWrongNonceGetsNothing() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        defer { channel.invalidate() }
-
-        let answer = ask(
-            socket: try socketPath(of: channel),
-            nonce: String(repeating: "0", count: 64),
-            prompt: "admin@10.0.0.4's password: ")
-
-        XCTAssertTrue(answer?.isEmpty ?? true)
+    func testNonSSHChildCannotBeRegistered() throws {
+        let channel = try makeChannel()
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["5"]
+        try child.run()
+        defer { child.terminate(); child.waitUntilExit() }
+        XCTAssertThrowsError(try channel.registerSSHProcess(child))
         XCTAssertFalse(channel.outcome.served)
-        XCTAssertEqual(channel.outcome.wrongNonceAttempts, 1)
     }
-
-    /// The password must never be offered up to a host key confirmation, a key
-    /// passphrase, or any other question ssh might route through askpass.
-    func testOnlyAPasswordPromptIsAnswered() throws {
-        let prompts = [
-            "Are you sure you want to continue connecting (yes/no/[fingerprint])?",
-            "Enter passphrase for key '/Users/admin/.ssh/id_ed25519': ",
-            "(admin@10.0.0.4) Verification code: ",
-            "",
-        ]
-        for prompt in prompts {
-            let channel = try AskpassChannel(password: SecureBuffer(secret))
-            defer { channel.invalidate() }
-
-            let answer = ask(socket: try socketPath(of: channel), nonce: channel.nonce, prompt: prompt)
-            XCTAssertTrue(answer?.isEmpty ?? true, prompt)
-            XCTAssertFalse(channel.outcome.served, prompt)
-            XCTAssertEqual(channel.outcome.refusedPrompts, [prompt.trimmingCharacters(in: .whitespaces)])
-        }
-    }
-
-    /// Answering the same question twice is a retry, and that is the thing
-    /// being refused.
-    func testTheSamePromptIsNeverAnsweredTwice() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        defer { channel.invalidate() }
-        let path = try socketPath(of: channel)
-
-        let first = ask(socket: path, nonce: channel.nonce, prompt: "user@host's password: ")
-        XCTAssertEqual(String(decoding: try XCTUnwrap(first), as: UTF8.self), secret + "\n")
-
-        let again = ask(socket: path, nonce: channel.nonce, prompt: "user@host's password: ")
-        XCTAssertTrue(again?.isEmpty ?? true)
-        XCTAssertEqual(channel.outcome.repeatedPrompts, 1)
-        XCTAssertTrue(channel.outcome.served)
-    }
-
-    /// ssh offers the password to each method the server advertises, wording
-    /// the prompt differently each time. That is one login attempt, not a
-    /// retry, and refusing it was refusing the login.
-    func testADifferentPromptIsAnswered() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        defer { channel.invalidate() }
-        let path = try socketPath(of: channel)
-
-        let keyboardInteractive = ask(
-            socket: path, nonce: channel.nonce, prompt: "(admin@10.0.0.4) Password:")
-        let passwordMethod = ask(
-            socket: path, nonce: channel.nonce, prompt: "admin@10.0.0.4's password: ")
-
-        XCTAssertEqual(String(decoding: try XCTUnwrap(keyboardInteractive), as: UTF8.self), secret + "\n")
-        XCTAssertEqual(String(decoding: try XCTUnwrap(passwordMethod), as: UTF8.self), secret + "\n")
-        XCTAssertEqual(channel.outcome.repeatedPrompts, 0)
-    }
-
-    func testItStopsAfterAFewDifferentPrompts() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        defer { channel.invalidate() }
-        let path = try socketPath(of: channel)
-
-        for index in 0..<AskpassChannel.maximumPrompts {
-            let answer = ask(socket: path, nonce: channel.nonce, prompt: "password \(index):")
-            XCTAssertFalse(answer?.isEmpty ?? true, "prompt \(index) should have been answered")
-        }
-
-        let beyond = ask(socket: path, nonce: channel.nonce, prompt: "password again:")
-        XCTAssertTrue(beyond?.isEmpty ?? true)
-        XCTAssertEqual(channel.outcome.repeatedPrompts, 1)
-    }
-
-    func testTheChannelIsUnusableOnceTheAttemptIsOver() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        let path = try socketPath(of: channel)
-
-        channel.invalidate()
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
-        XCTAssertNil(ask(socket: path, nonce: channel.nonce, prompt: "password: "))
-    }
-
-    func testInvalidatingRemovesTheSocketAndItsFolder() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        let path = try socketPath(of: channel)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: path))
-
-        channel.invalidate()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path))
-    }
-
-    func testTheSocketLivesInAFolderOnlyThisUserCanEnter() throws {
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        defer { channel.invalidate() }
-
-        let folder = URL(fileURLWithPath: try socketPath(of: channel)).deletingLastPathComponent()
-        let permissions = try FileManager.default
-            .attributesOfItem(atPath: folder.path)[.posixPermissions] as? NSNumber
-        XCTAssertEqual(permissions?.int16Value, 0o700)
-    }
-
-    func testTheEnvironmentHandedToSSHCarriesNoPassword() throws {
-        let channel = try AskpassChannel(
-            password: SecureBuffer(secret), helperPath: "/path/to/SSH-Wakey")
-        defer { channel.invalidate() }
-
-        let environment = channel.environmentAdditions()
-        XCTAssertEqual(environment["SSH_ASKPASS"], "/path/to/SSH-Wakey")
-        XCTAssertEqual(environment["SSH_ASKPASS_REQUIRE"], "force")
-        for value in environment.values {
-            XCTAssertFalse(value.contains(secret))
-        }
-    }
-
-    func testTheNonceIsLongAndDifferentEveryTime() throws {
-        let first = try AskpassChannel(password: SecureBuffer(secret))
-        defer { first.invalidate() }
-        let second = try AskpassChannel(password: SecureBuffer(secret))
-        defer { second.invalidate() }
-
-        XCTAssertEqual(first.nonce.count, 64)
-        XCTAssertNotEqual(first.nonce, second.nonce)
-    }
-
-    /// The socket path and the nonce both live in ssh's environment, and on
-    /// macOS anything running as this user can read that. So the nonce alone is
-    /// not proof of identity: the program on the other end has to be the helper
-    /// this app actually started.
-    func testAnotherProgramWithTheRightTokenIsStillRefused() throws {
-        let channel = try AskpassChannel(
-            password: SecureBuffer(secret), helperPath: "/usr/bin/true")
-        defer { channel.invalidate() }
-
-        let answer = ask(
-            socket: try socketPath(of: channel),
-            nonce: channel.nonce,
-            prompt: "admin@10.0.0.4's password: ")
-
-        XCTAssertTrue(answer?.isEmpty ?? true, "the password must not be handed over")
-        XCTAssertFalse(channel.outcome.served)
-        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 1)
-    }
-
-    func testTheRealHelperIsStillAnswered() throws {
-        // The tests run inside the app, so this process is the expected program.
-        let channel = try AskpassChannel(password: SecureBuffer(secret))
-        defer { channel.invalidate() }
-
-        let answer = ask(
-            socket: try socketPath(of: channel),
-            nonce: channel.nonce,
-            prompt: "admin@10.0.0.4's password: ")
-
-        XCTAssertEqual(String(decoding: try XCTUnwrap(answer), as: UTF8.self), secret + "\n")
-        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
-    }
-
-    /// If this ever fails, the identity check is comparing two spellings of the
-    /// same file and will refuse the genuine helper, which would break every
-    /// connection. Better to fail here, saying exactly that, than to have three
-    /// unrelated-looking tests fail somewhere else.
-    func testThisProcessIsRecognisedByTheSamePathItReports() throws {
-        let expected = URL(fileURLWithPath: try XCTUnwrap(Bundle.main.executablePath))
-            .resolvingSymlinksInPath().path
-
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        XCTAssertGreaterThan(proc_pidpath(getpid(), &buffer, UInt32(buffer.count)), 0)
-        let running = URL(fileURLWithPath: String(cString: buffer)).resolvingSymlinksInPath().path
-
-        XCTAssertEqual(running, expected,
-                       "the identity check compares these two, so they have to agree")
-    }
-
-    /// The whole path, for real: a separate process of this very binary, started
-    /// the way ssh starts it, asking over the socket and being answered.
-    ///
-    /// This is what proves the identity check does not lock out the genuine
-    /// helper, which would break every connection.
-    func testARealHelperProcessIsAnswered() throws {
-        let executable = try XCTUnwrap(Bundle.main.executablePath)
-        let channel = try AskpassChannel(password: SecureBuffer(secret), helperPath: executable)
-        defer { channel.invalidate() }
-
-        let helper = Process()
-        helper.executableURL = URL(fileURLWithPath: executable)
-        helper.arguments = ["admin@10.0.0.4's password: "]
+    func testARealHelperLaunchedByTheAppRefusesReplayedAuthorizationBeforeUI() async throws {
+        let channel = try makeChannel()
         var environment = ProcessRunner.minimalEnvironment()
         environment.merge(channel.environmentAdditions()) { _, new in new }
-        helper.environment = environment
+        let result = try await ProcessRunner.run(
+            executable: HelperLayout.adapterPath,
+            arguments: ["test-user@audit.invalid's password: "], environment: environment, timeout: 3)
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertFalse(result.timedOut, "replay must fail before it can display a popup")
+        XCTAssertTrue(result.standardOutput.isEmpty)
+        XCTAssertFalse(channel.outcome.served)
+        XCTAssertNil(channel.outcome.promptedAt)
+    }
+    func testMainExecutableCannotFallBackToUnsandboxedPasswordEntry() async throws {
+        let channel = try makeChannel()
+        var environment = ProcessRunner.minimalEnvironment()
+        environment.merge(channel.environmentAdditions()) { _, new in new }
+        let result = try await ProcessRunner.run(executable: try XCTUnwrap(Bundle.main.executablePath),
+            arguments: ["Password:"], environment: environment, timeout: 3)
+        XCTAssertEqual(result.exitCode, 1)
+        XCTAssertFalse(result.timedOut)
+        XCTAssertTrue(result.standardOutput.isEmpty)
+        XCTAssertNil(channel.outcome.promptedAt)
+    }
+    func testCodeDescriptorMustNameTheExpectedExecutableAndBeReadOnly() throws {
+        let executable = try XCTUnwrap(Bundle.main.executableURL).resolvingSymlinksInPath()
+        let handle = try FileHandle(forReadingFrom: executable)
+        defer { try? handle.close() }
+        XCTAssertEqual(HelperIdentity.requirement(from: handle, expectedExecutable: executable),
+                       HelperIdentity.requirement(at: Bundle.main.bundleURL))
+        XCTAssertNil(HelperIdentity.requirement(from: handle, expectedExecutable: URL(fileURLWithPath: "/bin/false")))
+        let copy = directory.appendingPathComponent("executable")
+        try FileManager.default.copyItem(at: executable, to: copy)
+        let writable = try FileHandle(forUpdating: copy)
+        defer { try? writable.close() }
+        XCTAssertNil(HelperIdentity.requirement(from: writable, expectedExecutable: copy))
+        let pipe = Pipe()
+        XCTAssertNil(HelperIdentity.requirement(from: pipe.fileHandleForReading, expectedExecutable: executable))
+    }
+    func testMissingOrUnsignedHelperCannotCreateAnAuthorizationChannel() throws {
+        for helper in [directory.appendingPathComponent("Missing.app/Contents/MacOS/helper"),
+                       directory.appendingPathComponent("Unsigned.app/Contents/MacOS/helper")] {
+            try FileManager.default.createDirectory(at: helper.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if helper.path.contains("Unsigned") { try Data("unsigned".utf8).write(to: helper) }
+            XCTAssertThrowsError(try AskpassChannel(context: context,
+                directory: directory.appendingPathComponent("bad"), helperPath: helper.path))
+        }
+    }
+    func testTheSocketAndItsFolderArePrivate() throws {
+        let channel = try makeChannel()
+        let path = try XCTUnwrap(channel.environmentAdditions()[AskpassProtocol.socketEnvironmentKey])
+        let socket = try FileManager.default.attributesOfItem(atPath: path)
+        let folder = try FileManager.default.attributesOfItem(atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path)
+        XCTAssertEqual((socket[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+        XCTAssertEqual((folder[.posixPermissions] as? NSNumber)?.intValue, 0o700)
+    }
+    func testInvalidatingEventuallyRemovesTheSocketAndIsIdempotent() throws {
+        let channel = try makeChannel()
+        let path = try XCTUnwrap(channel.environmentAdditions()[AskpassProtocol.socketEnvironmentKey])
+        channel.invalidate(); channel.invalidate()
+        let removed = expectation(for: NSPredicate { _, _ in !FileManager.default.fileExists(atPath: path) }, evaluatedWith: nil)
+        wait(for: [removed], timeout: 2)
+    }
+    func testTheEnvironmentCarriesOnlyAuthorizationIdentifiers() throws {
+        let channel = try makeChannel()
+        let environment = channel.environmentAdditions()
+        XCTAssertEqual(Set(environment.keys), ["SSH_ASKPASS", "SSH_ASKPASS_REQUIRE",
+                        AskpassProtocol.socketEnvironmentKey, AskpassProtocol.nonceEnvironmentKey])
+        XCTAssertEqual(environment["SSH_ASKPASS_REQUIRE"], "force")
+        XCTAssertFalse(environment.values.contains(context.destination))
+        XCTAssertFalse(Mirror(reflecting: channel).children.contains { $0.label == "password" })
+    }
+    func testEveryAttemptHasAnIndependent256BitNonce() throws {
+        let first = try makeChannel(), second = try makeChannel()
+        XCTAssertEqual(first.nonce.utf8.count, 64)
+        XCTAssertNotEqual(first.nonce, second.nonce)
+    }
+    func testOnlyOnePromptCanBeReservedEvenWhenSubmissionFails() {
+        var outcome = AskpassChannel.Outcome()
+        XCTAssertTrue(outcome.reservePrompt(at: 10))
+        XCTAssertFalse(outcome.served)
+        for time in [11.0, 12, 13] { XCTAssertFalse(outcome.reservePrompt(at: time)) }
+        XCTAssertEqual(outcome.promptedAt, 10)
+        XCTAssertEqual(outcome.repeatedPrompts, 3)
+    }
+    func testCancellationPreventsAFirstPromptReservation() {
+        var outcome = AskpassChannel.Outcome(); outcome.cancelled = true
+        XCTAssertFalse(outcome.reservePrompt(at: 1))
+        XCTAssertNil(outcome.promptedAt)
+    }
+    func testAStaticAskpassPromptCannotSelectAuthenticationCallbackMode() {
+        XCTAssertTrue(AskpassHelper.isAuthenticationCallback(arguments:
+            ["app", "--ssh-wakey-authenticated", "--post-authentication"]))
+        for arguments in [["app", "--ssh-wakey-authenticated"],
+                          ["app", "--ssh-wakey-authenticated --post-authentication"],
+                          ["app", "--post-authentication", "--ssh-wakey-authenticated"],
+                          ["app", "--ssh-wakey-authenticated", "--post-authentication", "extra"]] {
+            XCTAssertFalse(AskpassHelper.isAuthenticationCallback(arguments: arguments))
+        }
+    }
+    func testTheAuthenticationCallbackCannotBeReplayedByTheApp() async throws {
+        let channel = try makeChannel()
+        var environment = ProcessRunner.minimalEnvironment()
+        environment.merge(channel.environmentAdditions()) { _, new in new }
+        let result = try await ProcessRunner.run(executable: HelperLayout.adapterPath,
+            arguments: ["--ssh-wakey-authenticated", "--post-authentication"], environment: environment, timeout: 3)
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertFalse(result.timedOut)
+        XCTAssertFalse(channel.outcome.authenticated)
+    }
+    func testRealSSHAuthenticatesTheSignedCallbackOverLocalPipesWithSyntheticKeys() async throws {
+        try await exerciseRealSSH(manualPopup: ProcessInfo.processInfo.environment["SSHWAKEY_HELPER_UI_SMOKE"] == "1")
+    }
+    func testSandboxDeniesUnrelatedFilesAndNewNetworkConnectionsButAllowsPassedChannels() async throws {
+        try await exerciseRealSSH(sandboxProbe: true)
+    }
+    private func exerciseRealSSH(manualPopup: Bool = false, sandboxProbe: Bool = false) async throws {
+        // sshd inetd mode consumes stdin/stdout: no listening socket, service
+        // configuration, actual saved key, password or remote host is involved.
+        for name in ["host_key", "client_key"] {
+            let generated = try await ProcessRunner.run(executable: "/usr/bin/ssh-keygen",
+                arguments: ["-q", "-t", "ed25519", "-N", "", "-f", directory.appendingPathComponent(name).path])
+            XCTAssertEqual(generated.exitCode, 0)
+        }
+        let publicKey = try Data(contentsOf: directory.appendingPathComponent("client_key.pub"))
+        try ProtectedFile.write(publicKey, to: directory.appendingPathComponent("authorized_keys"))
+        let hostKey = try String(contentsOf: directory.appendingPathComponent("host_key.pub"), encoding: .utf8)
+            .split(separator: " ").prefix(2).joined(separator: " ")
+        try ProtectedFile.write(Data("audit.invalid \(hostKey)\n".utf8),
+                                to: directory.appendingPathComponent("known_hosts"))
+        let config = """
+        HostKey \(directory.appendingPathComponent("host_key").path)
+        AuthorizedKeysFile \(directory.appendingPathComponent("authorized_keys").path)
+        StrictModes no
+        PasswordAuthentication no
+        KbdInteractiveAuthentication no
+        UsePAM no
+        UseDNS no
+        AllowUsers \(NSUserName())
+        PermitUserRC no
+        PermitUserEnvironment no
+        DisableForwarding yes
+        ForceCommand /usr/bin/true
+        LogLevel DEBUG1
 
-        let output = Pipe()
-        let errors = Pipe()
-        helper.standardOutput = output
-        helper.standardError = errors
-        try helper.run()
-
-        let answer = output.fileHandleForReading.readDataToEndOfFile()
-        let complaints = errors.fileHandleForReading.readDataToEndOfFile()
-        helper.waitUntilExit()
-
-        let diagnosis = """
-        status \(helper.terminationStatus), reason \(helper.terminationReason.rawValue),         outcome \(channel.outcome), stderr: \(String(decoding: complaints, as: UTF8.self))
         """
-        XCTAssertEqual(String(decoding: answer, as: UTF8.self), secret + "\n", diagnosis)
-        XCTAssertEqual(helper.terminationStatus, 0, diagnosis)
-        XCTAssertTrue(channel.outcome.served, diagnosis)
-        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0, diagnosis)
+        let configuration = directory.appendingPathComponent("sshd_config")
+        try ProtectedFile.write(Data(config.utf8), to: configuration)
+        // Explicit local UI audit only. Ordinary test runs never show a popup.
+        // SSH has already authenticated using the disposable key. Its fixed
+        // LocalCommand then exercises the genuine helper/parent authorization
+        // with a synthetic destination; submitted text goes to a test pipe and is discarded.
+        let channel = try makeChannel()
+        let helper = HelperLayout.adapterPath
+        if manualPopup { print("SSHWAKEY_UI_HELPER_PATH=\(helper)") }
+        if sandboxProbe {
+            try ProtectedFile.write(Data("synthetic sandbox fixture".utf8),
+                to: directory.appendingPathComponent("sandbox-fixture"))
+        }
+        let quotedHelper = helper.replacingOccurrences(of: "%", with: "%%")
+            .replacingOccurrences(of: "'", with: "'\\''")
+        let localCommand = sandboxProbe ? "exec '\(quotedHelper)' --ssh-wakey-sandbox-check --diagnostic-only"
+            : manualPopup ? "exec '\(quotedHelper)' 'Password:'"
+            : AskpassHelper.authenticationCommand(helperPath: helper)
+        let transportLog = directory.appendingPathComponent("synthetic-transport.log")
+        try ProtectedFile.write(Data(), to: transportLog)
+        let transportOutput = try FileHandle(forWritingTo: transportLog)
+        defer { try? transportOutput.close() }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-v", "-F", "/dev/null", "-N", "-T",
+            "-o", "ProxyCommand=/usr/sbin/sshd -i -e -f '\(configuration.path)'",
+            "-o", "UserKnownHostsFile=\(directory.appendingPathComponent("known_hosts").path)",
+            "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=yes",
+            "-o", "IdentityAgent=none", "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+            "-i", directory.appendingPathComponent("client_key").path,
+            "-o", "PermitLocalCommand=yes", "-o", "LocalCommand=\(localCommand)",
+            "\(NSUserName())@audit.invalid"]
+        var environment = ProcessRunner.minimalEnvironment()
+        environment.merge(channel.environmentAdditions()) { _, new in new }
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        let passwordPipe = Pipe()
+        process.standardOutput = passwordPipe
+        // This read end belongs only to the synthetic test, not the main app's
+        // normal password flow. Never print or persist submitted text.
+        passwordPipe.fileHandleForReading.readabilityHandler = { handle in
+            _ = handle.availableData
+        }
+        defer { passwordPipe.fileHandleForReading.readabilityHandler = nil }
+        process.standardError = transportOutput
+        try process.run()
+        defer {
+            channel.invalidate()
+            if process.isRunning { process.terminate() }
+            // Bound cleanup even if a system component unexpectedly stalls.
+            let cleanupDeadline = Date().addingTimeInterval(1)
+            while process.isRunning && Date() < cleanupDeadline { usleep(10_000) }
+        }
+        try channel.registerSSHProcess(process)
+        if manualPopup || sandboxProbe {
+            let deadline = Date().addingTimeInterval(manualPopup ? 90 : 15)
+            while !channel.outcome.served && !channel.outcome.cancelled && process.isRunning && Date() < deadline {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            let finalOutcome = channel.outcome
+            print("SSHWAKEY_UI_STATUS served=\(finalOutcome.served) cancelled=\(finalOutcome.cancelled) wrongProgramAttempts=\(finalOutcome.wrongProgramAttempts)")
+            XCTAssertNotNil(channel.outcome.promptedAt, "the authenticated helper did not open its native popup")
+            XCTAssertTrue(channel.outcome.served || channel.outcome.cancelled,
+                          "manual UI audit timed out; cleanup cancels the popup")
+            XCTAssertFalse(channel.outcome.authenticated, "one password argument must not select the status callback")
+            XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
+            if sandboxProbe {
+                let replyDeadline = Date().addingTimeInterval(1)
+                var diagnostic = try String(contentsOf: transportLog, encoding: .utf8)
+                while !diagnostic.contains("SSHWAKEY_SANDBOX_") && Date() < replyDeadline {
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                    diagnostic = try String(contentsOf: transportLog, encoding: .utf8)
+                }
+                XCTAssertTrue(finalOutcome.served, diagnostic)
+                XCTAssertTrue(diagnostic.contains("SSHWAKEY_SANDBOX_OK"), diagnostic)
+            }
+            return
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while !channel.outcome.authenticated && Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let diagnostic = (try? ProtectedFile.read(from: transportLog, maximumBytes: 64 * 1024))
+            .map { String(decoding: $0, as: UTF8.self) } ?? "No bounded synthetic transport log"
+        XCTAssertTrue(channel.outcome.authenticated,
+                      "trusted callback was rejected: \(channel.outcome)\n\(diagnostic)")
+        XCTAssertFalse(channel.outcome.served, "key authentication must never display the password popup")
+        XCTAssertNil(channel.outcome.promptedAt)
+        XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
     }
-
-    // MARK: - Prompt matching
-
-    func testPromptMatching() {
-        XCTAssertTrue(AskpassProtocol.looksLikePasswordPrompt("admin@host's password: "))
+    func testAuthenticationCommandQuotesAnExecutablePathForTheLocalShell() async throws {
+        let executable = directory.appendingPathComponent("quote' $(touch UNEXPECTED-CALLBACK-FILE) `false`")
+        try ProtectedFile.write(Data("#!/bin/sh\n/usr/bin/printf '%s\\n' \"$@\"\n".utf8), to: executable, mode: 0o700)
+        let result = try await ProcessRunner.run(executable: "/bin/sh",
+            arguments: ["-c", AskpassHelper.authenticationCommand(helperPath: executable.path)])
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.standardOutput, "--ssh-wakey-authenticated\n--post-authentication\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: "UNEXPECTED-CALLBACK-FILE"))
+    }
+    func testAuthenticationCommandEscapesOpenSSHPercentTokensBeforeShellParsing() {
+        let command = AskpassHelper.authenticationCommand(helperPath: "/tmp/100%/app%n")
+        XCTAssertTrue(command.contains("100%%/app%%n"))
+    }
+    func testNonceComparisonRejectsWrongLengthAndWrongContent() {
+        let nonce = String(repeating: "a", count: 64)
+        XCTAssertTrue(AskpassProtocol.constantTimeEquals(nonce, nonce))
+        for value in ["", "a", nonce + "a", String(repeating: "b", count: 64)] {
+            XCTAssertFalse(AskpassProtocol.constantTimeEquals(nonce, value))
+        }
+    }
+    func testPromptFilteringCannotAuthorizeAHostKeyOrPrivateKeyPrompt() {
         XCTAssertTrue(AskpassProtocol.looksLikePasswordPrompt("Password:"))
-        XCTAssertFalse(AskpassProtocol.looksLikePasswordPrompt(
-            "Are you sure you want to continue connecting (yes/no)?"))
-        XCTAssertFalse(AskpassProtocol.looksLikePasswordPrompt("Enter passphrase for key: "))
-        XCTAssertFalse(AskpassProtocol.looksLikePasswordPrompt(""))
+        XCTAssertTrue(AskpassProtocol.looksLikePasswordPrompt("user@host's password: "))
+        for prompt in ["", "Verification code:", "Enter passphrase for key:",
+                       "password yes/no", "password fingerprint", "password (y/n)"] {
+            XCTAssertFalse(AskpassProtocol.looksLikePasswordPrompt(prompt), prompt)
+        }
     }
-
-    func testNonceComparisonIgnoresLengthDifferences() {
-        XCTAssertTrue(AskpassProtocol.constantTimeEquals("abc", "abc"))
-        XCTAssertFalse(AskpassProtocol.constantTimeEquals("abc", "abcd"))
-        XCTAssertFalse(AskpassProtocol.constantTimeEquals("abc", ""))
-        XCTAssertTrue(AskpassProtocol.constantTimeEquals("", ""))
+    func testPasswordProtocolRejectsNewlinesNULAndExcessBytes() {
+        for password in ["", "a\nb", "a\rb", "a\0b", String(repeating: "a", count: 1023)] {
+            XCTAssertFalse(AskpassProtocol.validPassword(password))
+        }
+        XCTAssertTrue(AskpassProtocol.validPassword(String(repeating: "a", count: 1022)))
+        XCTAssertTrue(AskpassProtocol.validPassword("pässwörd✓"))
+        XCTAssertFalse(AskpassProtocol.validPassword(String(repeating: "é", count: 512)))
     }
-
-    // MARK: - Askpass mode selection
-
-    func testAskpassModeIsOffUnlessBothEnvironmentValuesArePresent() {
-        XCTAssertNil(AskpassHelper.requestFromEnvironment(environment: [:], arguments: ["SSH-Wakey"]))
-        XCTAssertNil(AskpassHelper.requestFromEnvironment(
-            environment: [AskpassProtocol.socketEnvironmentKey: "/tmp/s"], arguments: ["SSH-Wakey"]))
-        XCTAssertNil(AskpassHelper.requestFromEnvironment(
-            environment: [AskpassProtocol.socketEnvironmentKey: "",
-                          AskpassProtocol.nonceEnvironmentKey: ""], arguments: ["SSH-Wakey"]))
+    func testMalformedEnvironmentAndOversizedPromptAreRejected() {
+        XCTAssertNil(AskpassHelper.requestFromEnvironment(environment: [:], arguments: ["app"]))
+        let valid = [AskpassProtocol.socketEnvironmentKey: "/tmp/fixture",
+                     AskpassProtocol.nonceEnvironmentKey: String(repeating: "a", count: 64)]
+        XCTAssertNil(AskpassHelper.requestFromEnvironment(environment: valid, arguments: ["app"]))
+        XCTAssertNil(AskpassHelper.requestFromEnvironment(environment: valid,
+                                                         arguments: ["app", String(repeating: "p", count: 2048)]))
+        var bad = valid; bad[AskpassProtocol.nonceEnvironmentKey] = "short"
+        XCTAssertNil(AskpassHelper.requestFromEnvironment(environment: bad, arguments: ["app", "Password:"]))
+        XCTAssertNotNil(AskpassHelper.requestFromEnvironment(environment: valid, arguments: ["app", "Password:"]))
     }
-
-    func testAskpassModeCollectsThePromptFromTheArguments() throws {
-        let request = try XCTUnwrap(AskpassHelper.requestFromEnvironment(
-            environment: [AskpassProtocol.socketEnvironmentKey: "/tmp/s",
-                          AskpassProtocol.nonceEnvironmentKey: "abc"],
-            arguments: ["SSH-Wakey", "admin@host's password: "]))
-        XCTAssertEqual(request.socketPath, "/tmp/s")
-        XCTAssertEqual(request.nonce, "abc")
-        XCTAssertEqual(request.prompt, "admin@host's password: ")
+    func testMetadataEncodingIsBoundedAndRejectsMalformedJSON() {
+        XCTAssertNil(AskpassProtocol.encode(String(repeating: "a", count: AskpassProtocol.maxRequestBytes)))
+        XCTAssertNil(AskpassProtocol.decode(AskpassProtocol.Message.self, "garbage"))
+    }
+    func testSocketFramingRejectsARequestWithoutANewlineBeforeItsDeadline() throws {
+        var sockets: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
+        defer { close(sockets[0]); close(sockets[1]) }
+        let bytes = Data("unterminated".utf8)
+        XCTAssertTrue(bytes.withUnsafeBytes { AskpassProtocol.writeAll(sockets[0], $0) })
+        let started = Date()
+        XCTAssertNil(AskpassProtocol.readLine(from: sockets[1], timeout: 0.05))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+    }
+    func testSocketFramingPreservesJSONWithoutTreatingItAsAShellCommand() throws {
+        var sockets: [Int32] = [-1, -1]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets), 0)
+        defer { close(sockets[0]); close(sockets[1]) }
+        let value = "$(ignored); 'literal'"
+        XCTAssertTrue(AskpassProtocol.sendLine(value, to: sockets[0]))
+        XCTAssertEqual(AskpassProtocol.readLine(from: sockets[1]), value)
     }
 }
 
-/// Covers how the password channel's observations are turned into a message.
 final class PasswordChannelReportingTests: XCTestCase {
-
-    private let failure = SSHFailure(
-        kind: .authentication, headline: "Authentication failed.",
-        guidance: "Check the username and password.", detail: nil)
-
-    @MainActor
-    func testAnUneventfulAttemptAddsNothing() {
-        let annotated = SSHSessionManager.annotated(failure, with: AskpassChannel.Outcome(served: true))
-        XCTAssertEqual(annotated.guidance, failure.guidance)
+    private let failure = SSHFailure(kind: .authentication, headline: "Authentication failed.",
+                                     guidance: "Check the username and password.", detail: nil)
+    @MainActor func testAnUneventfulAttemptAddsNothing() {
+        XCTAssertEqual(SSHSessionManager.annotated(failure, with: AskpassChannel.Outcome(served: true)).guidance,
+                       failure.guidance)
     }
-
-    @MainActor
-    func testARepeatedPromptIsExplainedRatherThanHidden() {
-        var outcome = AskpassChannel.Outcome()
-        outcome.served = true
-        outcome.repeatedPrompts = 1
-
+    @MainActor func testARepeatedPromptIsExplained() {
+        var outcome = AskpassChannel.Outcome(); outcome.served = true; outcome.repeatedPrompts = 1
         let annotated = SSHSessionManager.annotated(failure, with: outcome)
-        let guidance = try? XCTUnwrap(annotated.guidance)
-        XCTAssertTrue(guidance?.contains("same question") ?? false, annotated.guidance ?? "")
-        XCTAssertTrue(guidance?.contains("failed logins") ?? false, annotated.guidance ?? "")
+        XCTAssertTrue(annotated.guidance?.contains("password again") ?? false)
+        XCTAssertTrue(annotated.guidance?.contains("failed logins") ?? false)
     }
-
-    @MainActor
-    func testAnUnansweredPromptIsQuoted() {
-        var outcome = AskpassChannel.Outcome()
-        outcome.refusedPrompts = ["Verification code: "]
-
-        let annotated = SSHSessionManager.annotated(failure, with: outcome)
-        XCTAssertTrue(annotated.guidance?.contains("Verification code") ?? false)
+    func testServerPromptTextDoesNotAppearInTheSummary() {
+        var outcome = AskpassChannel.Outcome(); outcome.refusedPrompts = ["synthetic-password-reflected-by-server"]
+        XCTAssertFalse(outcome.summary.contains("synthetic-password"))
+        XCTAssertTrue(outcome.summary.contains("unsupported authentication prompt refused"))
     }
-
-    @MainActor
-    func testAnUnauthorisedReadOfTheChannelIsReported() {
-        var wrongToken = AskpassChannel.Outcome()
-        wrongToken.wrongNonceAttempts = 2
-        var wrongUser = AskpassChannel.Outcome()
-        wrongUser.wrongUserAttempts = 1
-        var wrongProgram = AskpassChannel.Outcome()
-        wrongProgram.wrongProgramAttempts = 1
-
-        for outcome in [wrongToken, wrongUser, wrongProgram] {
-            let annotated = SSHSessionManager.annotated(failure, with: outcome)
-            XCTAssertTrue(annotated.guidance?.contains("was refused") ?? false, "\(outcome)")
-            XCTAssertTrue(annotated.guidance?.contains("worth looking into") ?? false, "\(outcome)")
+    @MainActor func testUnauthorizedRequestsAreReported() {
+        var token = AskpassChannel.Outcome(); token.wrongNonceAttempts = 1
+        var user = AskpassChannel.Outcome(); user.wrongUserAttempts = 1
+        var program = AskpassChannel.Outcome(); program.wrongProgramAttempts = 1
+        for outcome in [token, user, program] {
+            XCTAssertTrue(SSHSessionManager.annotated(failure, with: outcome).guidance?.contains("was refused") ?? false)
         }
     }
 }

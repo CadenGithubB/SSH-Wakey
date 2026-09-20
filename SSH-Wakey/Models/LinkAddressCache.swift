@@ -3,8 +3,8 @@ import Foundation
 /// Host → Ethernet address learned after a successful connect.
 ///
 /// The MDM catalog is not writable, so Wake still needs somewhere to keep a
-/// MAC. The same cache is used in Standard as a backup next to the field on
-/// the connection itself.
+/// MAC. Standard connections keep this value only in their connection record,
+/// so encrypted stores do not leave a plaintext hostname sidecar.
 struct LinkAddressCache: Sendable {
 
     let fileURL: URL
@@ -29,18 +29,19 @@ struct LinkAddressCache: Sendable {
     }
 
     private func table() -> [String: String] {
-        guard let data = try? Data(contentsOf: fileURL),
+        guard let data = try? ProtectedFile.read(from: fileURL),
               let decoded = try? JSONDecoder().decode([String: String].self, from: data)
         else { return [:] }
         return decoded
     }
 
+    /// Removes legacy Standard metadata when encryption is enabled or opened.
+    /// This cannot erase copies already retained by backups or APFS snapshots.
+    func remove() throws { try ProtectedFile.remove(at: fileURL) }
+
     private func save(_ table: [String: String]) {
         do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700])
+            try ProtectedFile.createPrivateDirectory(at: fileURL.deletingLastPathComponent())
             let data = try JSONEncoder().encode(table)
             try ProtectedFile.write(data, to: fileURL)
         } catch {

@@ -21,8 +21,8 @@ struct HelpPoint: Identifiable {
 enum HelpNotes {
 
     static let passwordNote = """
-    The password is used once, for this connection attempt only. It is never written to disk, never \
-    placed in a command line, and never kept after the attempt finishes.
+    SSH opens a native password popup when needed. The helper submits your answer once and exits. \
+    SSH-Wakey does not save SSH passwords or put them in command arguments.
     """
 
     static func topics(isManagedBuild: Bool) -> [HelpTopic] {
@@ -49,9 +49,9 @@ enum HelpNotes {
             icon: "lock.shield",
             title: "Your password is used once and then thrown away",
             body: """
-            What you type goes straight to ssh through a channel that works exactly once. It is \
-            never written to disk, never placed on a command line, and nothing keeps it after the \
-            attempt ends.
+            A separate native helper submits your password directly to SSH, then clears its controlled \
+            buffer and exits. SSH-Wakey does not save it or put it in command arguments. Native \
+            text-entry frameworks and SSH still hold temporary copies in memory.
             """),
     ]
 
@@ -91,9 +91,8 @@ enum HelpNotes {
             it, which is why it asks before quitting.
 
             Each saved machine remembers which of those two you chose, so waking one Mac does not \
-            change what the button does on the next. The password sheet shows the destination and \
-            the mode together. You can still change the mode there, and that change is saved on \
-            this machine.
+            change what the button does on the next. The native password popup confirms the \
+            destination and the selected action. Set the mode before starting the attempt.
 
             Before SSH, Wake sends a short network poke the machine can hear while asleep, then \
             waits. The status line says Waking the machine... during that. It is not Apple Remote \
@@ -104,15 +103,15 @@ enum HelpNotes {
             icon: "lock.shield",
             title: "Your password is used once and then thrown away",
             body: """
-            What you type goes straight to ssh through a channel that works exactly once. It is \
-            never written to disk, never placed on a command line, and nothing keeps it after the \
-            attempt ends.
+            A separate native helper submits your password directly to SSH, then clears its controlled \
+            buffer and exits. SSH-Wakey does not save it or put it in command arguments. Native \
+            text-entry frameworks and SSH still hold temporary copies in memory.
 
             It is also never reused. If the machine rejects it, ssh asks again for a second login \
             method and SSH-Wakey does not answer, because that would be a silent retry with a \
             password already known to be wrong. You press Wake or Connect and type it again instead.
 
-            While the password sheet is open it is kept out of screenshots and screen recordings.
+            The native field masks the password. The popup itself can appear in screenshots and recordings.
             """),
 
         HelpTopic(
@@ -225,7 +224,7 @@ enum HelpNotes {
             turned you away, which usually means Remote Login is off. Timed out or unreachable \
             means nothing answered at all.
 
-            Whatever ssh reported is under Show details, word for word.
+            Activity shows curated results. Raw server text is omitted because a server can put sensitive or misleading text into its replies.
             """),
     ]
 }

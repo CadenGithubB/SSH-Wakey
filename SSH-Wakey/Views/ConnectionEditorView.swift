@@ -33,6 +33,7 @@ struct ConnectionEditorView: View {
     private var candidate: SSHConnection {
         var copy = draft
         copy.port = Int(portText.trimmingCharacters(in: .whitespaces)) ?? -1
+        copy.strictHostKeyChecking = true
         return copy.normalized
     }
 
@@ -74,7 +75,7 @@ struct ConnectionEditorView: View {
                     LabeledContent {
                         VStack(alignment: .leading, spacing: 3) {
                             TextField("Extra SSH arguments", text: $draft.extraArguments,
-                                      prompt: Text("-J jumphost -o ServerAliveInterval=30"))
+                                      prompt: Text("-o ServerAliveInterval=30"))
                                 .labelsHidden()
                                 .font(.system(size: 12, design: .monospaced))
                             message(issue(for: .arguments))
@@ -95,17 +96,10 @@ struct ConnectionEditorView: View {
                         }
                     }
 
-                    Toggle(isOn: $draft.strictHostKeyChecking) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Require a known host key")
-                            Text(draft.strictHostKeyChecking
-                                 ? "An unknown host is refused. SSH-Wakey offers to show you its fingerprint so you can approve it."
-                                 : "An unknown host is trusted on first use. A host key that has changed is still refused.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
+                    Text("An independently verified Ed25519 host key is required. Unknown or changed keys are refused before authentication.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     Picker("When you press the button", selection: $draft.connectMode) {
                         ForEach(ConnectMode.allCases) { mode in
@@ -222,10 +216,8 @@ struct SSHOptionsReference: View {
     private static let groups: [Group] = [
         Group(title: "Seeing what is happening", options: [
             ("-v", "Print what ssh is doing. Repeat as -vv or -vvv for more."),
-            ("-q", "Quiet. Hides warnings."),
         ]),
         Group(title: "Getting there", options: [
-            ("-J admin@jump.example.com", "Reach the machine through a jump host."),
             ("-i ~/.ssh/id_ed25519", "Offer one particular private key."),
             ("-4", "Force IPv4. Useful when a name resolves to both."),
             ("-6", "Force IPv6."),
@@ -234,14 +226,6 @@ struct SSHOptionsReference: View {
             ("-o ServerAliveInterval=30", "Send a keepalive every 30 seconds so an idle session is not dropped."),
             ("-o ServerAliveCountMax=3", "Give up after this many keepalives go unanswered."),
             ("-o ConnectionAttempts=3", "Retry the initial connection this many times."),
-        ]),
-        Group(title: "Carrying things over the connection", options: [
-            ("-L 8080:localhost:80", "Local port 8080 here reaches port 80 on the far side."),
-            ("-R 9090:localhost:90", "Remote port 9090 there reaches port 90 here."),
-            ("-D 1080", "A SOCKS proxy on local port 1080."),
-            ("-C", "Compress the connection. Worth it on a slow link."),
-            ("-A", "Forward your SSH agent, so the remote machine can use your keys."),
-            ("-X", "Forward X11."),
         ]),
     ]
 
@@ -288,9 +272,9 @@ struct SSHOptionsReference: View {
                     Text("""
                     Anything that can make ssh run another program on this Mac: ProxyCommand, \
                     LocalCommand, PermitLocalCommand, KnownHostsCommand, PKCS11Provider, Match, \
-                    Include. Anything that points ssh at a different known_hosts. And anything \
-                    SSH-Wakey sets itself, such as -p, -l, -M, -S, ControlPath and \
-                    StrictHostKeyChecking.
+                    Include, and -F, which loads a config file that can contain those. Anything \
+                    that points ssh at a different known_hosts. And anything SSH-Wakey sets \
+                    itself, such as -p, -l, -M, -S, ControlPath and StrictHostKeyChecking.
 
                     Arguments are split by SSH-Wakey, never by a shell, so quotes group words and \
                     $(...) is just text.

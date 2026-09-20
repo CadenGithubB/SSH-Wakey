@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Field-level checks for a saved connection.
@@ -37,9 +38,9 @@ enum ConnectionValidator {
             case .emptyHost:
                 return "Enter a hostname or IP address."
             case .invalidUsername:
-                return "The username may not contain spaces, @, : or a leading dash."
+                return "Use a username containing letters, numbers, dots, underscores or hyphens, with no leading hyphen."
             case .invalidHost:
-                return "The hostname may not contain spaces, @, / or a leading dash."
+                return "Enter one DNS hostname, IPv4 address or IPv6 address. Host patterns, aliases and command characters are not allowed."
             case .portOutOfRange(let port):
                 return "Port \(port) is out of range. Use a number from 1 to 65535."
             case .badArguments(let reason):
@@ -96,9 +97,8 @@ enum ConnectionValidator {
     /// so it is refused even though the value is passed as a separate argument.
     static func isValidUsername(_ username: String) -> Bool {
         guard !username.isEmpty, username.count <= 256, !username.hasPrefix("-") else { return false }
-        let rejected = CharacterSet(charactersIn: "@: /\\\t\n\"'")
-        guard username.rangeOfCharacter(from: rejected) == nil else { return false }
-        return !username.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        return username.unicodeScalars.allSatisfy(allowed.contains)
     }
 
     /// Accepts hostnames, IPv4 literals and bracketed or bare IPv6 literals.
@@ -106,8 +106,38 @@ enum ConnectionValidator {
     /// the name resolves.
     static func isValidHost(_ host: String) -> Bool {
         guard !host.isEmpty, host.count <= 255, !host.hasPrefix("-") else { return false }
-        let rejected = CharacterSet(charactersIn: "@/\\ \t\n\"'")
-        guard host.rangeOfCharacter(from: rejected) == nil else { return false }
-        return !host.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        if host.contains(":") {
+            var address = host
+            if address.hasPrefix("[") && address.hasSuffix("]") {
+                address = String(address.dropFirst().dropLast())
+            }
+            let pieces = address.split(separator: "%", omittingEmptySubsequences: false)
+            guard (1...2).contains(pieces.count) else { return false }
+            if pieces.count == 2 {
+                let zone = pieces[1]
+                let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+                guard !zone.isEmpty, zone.count <= 32, !zone.hasPrefix("-"),
+                      zone.unicodeScalars.allSatisfy(allowed.contains) else { return false }
+            }
+            var parsed = in6_addr()
+            return String(pieces[0]).withCString { inet_pton(AF_INET6, $0, &parsed) } == 1
+        }
+        let name = host.hasSuffix(".") ? String(host.dropLast()) : host
+        let letters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+        let interior = letters.union(CharacterSet(charactersIn: "-"))
+        return name.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+            guard (1...63).contains(label.utf8.count),
+                  let first = label.unicodeScalars.first, let last = label.unicodeScalars.last,
+                  letters.contains(first), letters.contains(last) else { return false }
+            return label.unicodeScalars.allSatisfy(interior.contains)
+        }
+    }
+
+    static func canonicalHost(_ host: String) -> String {
+        let value = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasPrefix("[") && value.hasSuffix("]") {
+            return String(value.dropFirst().dropLast()).lowercased()
+        }
+        return value.lowercased()
     }
 }

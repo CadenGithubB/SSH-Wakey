@@ -1,113 +1,84 @@
+import Darwin
 import Foundation
 
-/// A heap buffer for a password that is overwritten with zeros as soon as the
-/// connection attempt ends.
-///
-/// Swift's `String` cannot be wiped: its storage is immutable, reference
-/// counted and may already have been copied by the time we see it. So the
-/// password is copied into raw memory we own the moment it leaves the text
-/// field, the text binding is cleared, and this buffer is what the rest of the
-/// app passes around. SECURITY.md documents the residual limitation.
+/// Owns bounded page-aligned memory. Cocoa input and cryptographic framework
+/// storage remain outside this owner. Failure to lock memory is an error.
 final class SecureBuffer: @unchecked Sendable {
+    enum BufferError: LocalizedError, Equatable {
+        case invalidCapacity, allocationFailed, memoryLockFailed
+        var errorDescription: String? {
+            switch self {
+            case .invalidCapacity: return "The secret exceeds the supported size."
+            case .allocationFailed: return "Could not allocate protected memory."
+            case .memoryLockFailed: return "Could not lock protected memory. No password was sent."
+            }
+        }
+    }
 
+    static let maximumCapacity = 1_048_576
     private var base: UnsafeMutableRawPointer?
-    private var allocated: Int = 0
-    private var count: Int = 0
-    private var isPinned = false
+    private var mappedSize = 0
+    private var capacity = 0
+    private var count = 0
     private let lock = NSLock()
 
-    /// True when the pages holding the password were pinned into physical
-    /// memory, so the plaintext cannot be written out to swap.
-    var isMemoryLocked: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return isPinned
-    }
-
-    init(_ string: String) {
-        var bytes = Array(string.utf8)
-        allocated = max(bytes.count, 1)
-        let pointer = UnsafeMutableRawPointer.allocate(byteCount: allocated, alignment: 1)
-        // Pin the page before the plaintext is written into it, so it is never
-        // eligible for swap even briefly. macOS encrypts swap, but not writing
-        // the password there at all is better than relying on that.
-        isPinned = mlock(pointer, allocated) == 0
-        bytes.withUnsafeBytes { source in
-            if let sourceBase = source.baseAddress, source.count > 0 {
-                pointer.copyMemory(from: sourceBase, byteCount: source.count)
-            }
+    convenience init(_ string: String) throws {
+        let length = string.utf8.count
+        try self.init(capacity: max(length, 1))
+        // Iterate the existing UTF-8 view without making a plaintext Array.
+        withFreeSpace { bytes in
+            var offset = 0
+            for byte in string.utf8 { bytes[offset] = byte; offset += 1 }
         }
-        base = pointer
-        count = bytes.count
-        // Wipe the intermediate copy too. The original String is beyond reach.
-        bytes.withUnsafeMutableBytes { buffer in
-            if let address = buffer.baseAddress, buffer.count > 0 {
-                memset_s(address, buffer.count, 0, buffer.count)
-            }
+        advance(by: length)
+    }
+
+    init(capacity: Int) throws {
+        guard capacity > 0, capacity <= Self.maximumCapacity else { throw BufferError.invalidCapacity }
+        let page = Int(getpagesize())
+        let length = ((capacity + page - 1) / page) * page
+        guard let pointer = mmap(nil, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0),
+              pointer != MAP_FAILED else { throw BufferError.allocationFailed }
+        guard mlock(pointer, length) == 0 else {
+            munmap(pointer, length)
+            throw BufferError.memoryLockFailed
         }
-        bytes.removeAll(keepingCapacity: false)
+        self.base = pointer
+        self.mappedSize = length
+        self.capacity = capacity
     }
 
-    /// An empty locked buffer of a fixed size, to be filled in place.
-    ///
-    /// A growing `Array` is the wrong shape for a secret: every time it outgrows
-    /// its storage it copies itself somewhere new and frees the old block
-    /// without overwriting it, leaving stale copies of the plaintext scattered
-    /// through the heap. Allocating the whole thing once avoids that entirely.
-    init(capacity: Int) {
-        allocated = max(capacity, 1)
-        let pointer = UnsafeMutableRawPointer.allocate(byteCount: allocated, alignment: 1)
-        isPinned = mlock(pointer, allocated) == 0
-        memset_s(pointer, allocated, 0, allocated)
-        base = pointer
-        count = 0
-    }
+    var isMemoryLocked: Bool { lock.lock(); defer { lock.unlock() }; return base != nil }
+    var byteCount: Int { lock.lock(); defer { lock.unlock() }; return count }
+    var isEmpty: Bool { lock.lock(); defer { lock.unlock() }; return count == 0 }
 
-    /// How many bytes have been written so far.
-    var byteCount: Int {
-        lock.lock(); defer { lock.unlock() }
-        return count
-    }
-
-    /// Hands over the unwritten tail, so bytes can be read straight into place.
-    /// Returns nil once wiped, or when the buffer is full.
     func withFreeSpace<R>(_ body: (UnsafeMutableRawBufferPointer) throws -> R) rethrows -> R? {
         lock.lock(); defer { lock.unlock() }
-        guard let base, count < allocated else { return nil }
-        return try body(UnsafeMutableRawBufferPointer(
-            start: base.advanced(by: count), count: allocated - count))
+        guard let base, count < capacity else { return nil }
+        return try body(UnsafeMutableRawBufferPointer(start: base.advanced(by: count), count: capacity - count))
     }
 
-    /// Confirms how much of the free space was just filled.
     func advance(by written: Int) {
         lock.lock(); defer { lock.unlock() }
-        count = min(count + max(written, 0), allocated)
+        count += min(max(written, 0), capacity - count)
     }
 
-    var isEmpty: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return base == nil || count == 0
-    }
-
-    /// Gives temporary access to the raw bytes. Returns nil once wiped.
     func withBytes<R>(_ body: (UnsafeRawBufferPointer) throws -> R) rethrows -> R? {
         lock.lock(); defer { lock.unlock() }
         guard let base else { return nil }
         return try body(UnsafeRawBufferPointer(start: base, count: count))
     }
 
-    /// Overwrites the bytes and frees them. Safe to call more than once.
     func wipe() {
         lock.lock(); defer { lock.unlock() }
         guard let pointer = base else { return }
-        memset_s(pointer, allocated, 0, allocated)
-        if isPinned {
-            munlock(pointer, allocated)
-            isPinned = false
-        }
-        pointer.deallocate()
+        memset_s(pointer, mappedSize, 0, mappedSize)
+        munlock(pointer, mappedSize)
+        munmap(pointer, mappedSize)
         base = nil
         count = 0
-        allocated = 0
+        capacity = 0
+        mappedSize = 0
     }
 
     deinit { wipe() }

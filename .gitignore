@@ -8,3 +8,13 @@ xcuserdata/
 *.xcscmblueprint
 *.xccheckout
 .swiftpm/
+
+# Local execution artifacts can contain private paths and machine details.
+*.log
+*.xcresult/
+*.xcactivitylog
+*.crash
+*.ips
+*.dSYM/
+core
+core.[0-9]*

@@ -8,7 +8,7 @@ final class TerminalHandoffTests: XCTestCase {
 
     func testTheScriptAttachesToTheExistingSession() {
         let script = TerminalHandoff.scriptContents(for: connection, controlPath: "/tmp/ctl")
-        XCTAssertTrue(script.contains("ControlPath=/tmp/ctl"))
+        XCTAssertTrue(script.contains("ControlPath=\"/tmp/ctl\""))
         XCTAssertTrue(script.contains("ControlMaster=no"))
         XCTAssertTrue(script.contains("/usr/bin/ssh"))
     }
@@ -45,7 +45,7 @@ final class TerminalHandoffTests: XCTestCase {
         let awkward = SSHConnection(
             name: "Odd", username: "admin", host: "10.0.0.4", port: 22)
         let script = TerminalHandoff.scriptContents(for: awkward, controlPath: "/tmp/a b/ctl")
-        XCTAssertTrue(script.contains("'ControlPath=/tmp/a b/ctl'"))
+        XCTAssertTrue(script.contains("'ControlPath=\"/tmp/a b/ctl\"'"))
         XCTAssertTrue(script.contains("'10.0.0.4'"))
     }
 

@@ -60,4 +60,46 @@ final class NetworkWakeTests: XCTestCase {
         XCTAssertTrue(NetworkWake.shouldPoke(
             host: "example.com", hardwareAddress: "aa:bb:cc:dd:ee:ff"))
     }
+
+    func testResolverReturnsResultWithoutNetworkAccess() async {
+        let result = await NetworkWake.resolvedIPv4Addresses("test.invalid") { _ in ["203.0.113.7"] }
+        XCTAssertEqual(result, ["203.0.113.7"])
+    }
+
+    func testResolverDeadlineDoesNotWaitForBlockingSystemCall() async {
+        let release = DispatchSemaphore(value: 0)
+        let finished = expectation(description: "late resolver returns safely")
+        let start = Date()
+        let result = await NetworkWake.resolvedIPv4Addresses("test.invalid", timeout: 0.05) { _ in
+            release.wait()
+            finished.fulfill()
+            return ["203.0.113.7"]
+        }
+        XCTAssertEqual(result, [])
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.75)
+        release.signal()
+        await fulfillment(of: [finished], timeout: 1)
+    }
+
+    func testCancellingResolverReturnsBeforeBlockingCallCompletes() async {
+        let release = DispatchSemaphore(value: 0)
+        let started = expectation(description: "resolver starts")
+        let finished = expectation(description: "late resolver finishes")
+        let task = Task {
+            await NetworkWake.resolvedIPv4Addresses("test.invalid") { _ in
+                started.fulfill()
+                release.wait()
+                finished.fulfill()
+                return ["203.0.113.7"]
+            }
+        }
+        await fulfillment(of: [started], timeout: 1)
+        let start = Date()
+        task.cancel()
+        let result = await task.value
+        XCTAssertEqual(result, [])
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.75)
+        release.signal()
+        await fulfillment(of: [finished], timeout: 1)
+    }
 }

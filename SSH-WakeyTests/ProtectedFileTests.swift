@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 @testable import SSH_Wakey
 
@@ -65,4 +66,123 @@ final class ProtectedFileTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url).count, 0)
         XCTAssertEqual(try mode(of: url), 0o600)
     }
+
+    private func addACL(_ entry: String, to url: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        process.arguments = ["+a", entry, url.path]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    func testInheritedACLDoesNotGrantReadAccessToWrittenFile() throws {
+        try addACL("everyone allow read,execute,file_inherit,directory_inherit", to: directory)
+        let file = directory.appendingPathComponent("private.json")
+        try ProtectedFile.write(Data("private metadata".utf8), to: file)
+        let descriptor = open(file.path, O_RDONLY | O_NOFOLLOW)
+        XCTAssertGreaterThanOrEqual(descriptor, 0)
+        defer { close(descriptor) }
+        if let acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED) {
+            defer { acl_free(UnsafeMutableRawPointer(acl)) }
+            var entry: acl_entry_t?
+            XCTAssertEqual(acl_get_entry(acl, ACL_FIRST_ENTRY.rawValue, &entry), -1,
+                           "new file must have an empty ACL before it receives data")
+        } else {
+            XCTAssertEqual(errno, ENOENT)
+        }
+        XCTAssertEqual(try mode(of: file), 0o600)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["private.json"])
+    }
+
+    func testACLWritableParentIsRefused() throws {
+        try addACL("everyone allow write,add_subdirectory,delete_child", to: directory)
+        XCTAssertThrowsError(try ProtectedFile.write(Data("private".utf8), to: directory.appendingPathComponent("secret")))
+    }
+
+    func testSymlinkedParentAndLeafAreRefused() throws {
+        let real = directory.appendingPathComponent("real", isDirectory: true)
+        try ProtectedFile.createPrivateDirectory(at: real)
+        let link = directory.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        XCTAssertThrowsError(try ProtectedFile.createPrivateDirectory(at: link))
+        XCTAssertThrowsError(try ProtectedFile.write(Data(), to: link.appendingPathComponent("secret")))
+        let target = real.appendingPathComponent("secret")
+        try ProtectedFile.write(Data("original".utf8), to: target)
+        let leaf = directory.appendingPathComponent("leaf")
+        try FileManager.default.createSymbolicLink(at: leaf, withDestinationURL: target)
+        XCTAssertThrowsError(try ProtectedFile.read(from: leaf))
+        XCTAssertThrowsError(try ProtectedFile.write(Data(), to: leaf))
+        XCTAssertEqual(try ProtectedFile.read(from: target), Data("original".utf8))
+    }
+
+    func testFIFOAndHardLinkedFilesAreRefused() throws {
+        let fifo = directory.appendingPathComponent("fifo")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+        XCTAssertThrowsError(try ProtectedFile.read(from: fifo))
+        let file = directory.appendingPathComponent("one")
+        try ProtectedFile.write(Data("original".utf8), to: file)
+        let alias = directory.appendingPathComponent("two")
+        XCTAssertEqual(link(file.path, alias.path), 0)
+        XCTAssertThrowsError(try ProtectedFile.read(from: file))
+        XCTAssertThrowsError(try ProtectedFile.write(Data(), to: file))
+    }
+
+    func testRevisionConflictPreservesExternalReplacement() throws {
+        let file = directory.appendingPathComponent("state.json")
+        let original = Data("original".utf8)
+        try ProtectedFile.write(original, to: file)
+        let revision = ProtectedFile.revision(of: original)
+        let replacement = Data("external edit".utf8)
+        try ProtectedFile.write(replacement, to: file)
+        XCTAssertThrowsError(try ProtectedFile.write(Data("stale edit".utf8), to: file, expectedRevision: revision))
+        XCTAssertEqual(try ProtectedFile.read(from: file), replacement)
+    }
+
+    func testReadSizeLimitRejectsOversizedFile() throws {
+        let file = directory.appendingPathComponent("bounded")
+        try ProtectedFile.write(Data(repeating: 7, count: 128), to: file)
+        XCTAssertThrowsError(try ProtectedFile.read(from: file, maximumBytes: 64))
+    }
+
+    func testConcurrentUpdatesPreserveEveryWrite() async throws {
+        let file = directory.appendingPathComponent("updates")
+        let successes = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+            for _ in 0..<20 {
+                group.addTask {
+                    do {
+                        try ProtectedFile.update(at: file) { existing in
+                            var data = existing ?? Data()
+                            data.append(1)
+                            return data
+                        }
+                        return true
+                    } catch { return false }
+                }
+            }
+            var count = 0
+            for await succeeded in group { if succeeded { count += 1 } }
+            return count
+        }
+        XCTAssertEqual(successes, 20)
+        XCTAssertEqual(try ProtectedFile.read(from: file)?.count, 20)
+    }
+
+
+    func testPostCommitSideEffectRunsBeforeReleasingDirectoryLock() throws {
+        let file = directory.appendingPathComponent("transaction")
+        let otherDescriptor = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        XCTAssertGreaterThanOrEqual(otherDescriptor, 0)
+        defer { close(otherDescriptor) }
+        var called = false
+        try ProtectedFile.update(at: file, afterWrite: {
+            called = true
+            XCTAssertEqual(flock(otherDescriptor, LOCK_EX | LOCK_NB), -1)
+            XCTAssertEqual(errno, EWOULDBLOCK)
+        }) { _ in Data("committed".utf8) }
+        XCTAssertTrue(called)
+        XCTAssertEqual(flock(otherDescriptor, LOCK_EX | LOCK_NB), 0)
+        flock(otherDescriptor, LOCK_UN)
+    }
+
 }

@@ -7,8 +7,7 @@ import Foundation
 /// passed or stored anywhere in this path. No keystrokes are simulated and no
 /// application is scripted; Terminal is simply asked to open a file.
 ///
-/// That file is a short shell script, which is the one place in SSH-Wakey
-/// where a shell is involved. It holds no secret, every value in it is quoted,
+/// That file is a short shell script. It holds no secret, every value is quoted,
 /// and it removes itself the moment it starts.
 enum TerminalHandoff {
 
@@ -31,16 +30,15 @@ enum TerminalHandoff {
         let contents = scriptContents(for: connection, controlPath: controlPath)
 
         do {
-            try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+            try ProtectedFile.write(Data(contents.utf8), to: scriptURL, mode: 0o700)
         } catch {
             throw HandoffError.scriptNotWritten(error.localizedDescription)
         }
 
         let opener = Process()
         opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        opener.arguments = ["-a", "Terminal", scriptURL.path]
+        opener.arguments = ["-a", "/System/Applications/Utilities/Terminal.app", scriptURL.path]
+        opener.environment = ProcessRunner.minimalEnvironment()
         opener.standardInput = FileHandle.nullDevice
         opener.standardOutput = FileHandle.nullDevice
         opener.standardError = FileHandle.nullDevice
@@ -60,7 +58,7 @@ enum TerminalHandoff {
         #!/bin/sh
         # Written by SSH-Wakey for a session that is already authenticated.
         # It contains no password, and it deletes itself before connecting.
-        rm -f "$0"
+        /bin/rm -f "$0"
         exec \(quoted)
         """
     }

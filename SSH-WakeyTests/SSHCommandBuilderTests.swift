@@ -9,7 +9,9 @@ final class SSHCommandBuilderTests: XCTestCase {
 
     private func masterArguments(_ connection: SSHConnection) throws -> [String] {
         try SSHCommandBuilder.masterArguments(
-            for: connection, controlPath: "/tmp/ctl", connectTimeout: 10)
+            for: connection, controlPath: "/tmp/ctl", connectTimeout: 10,
+            diagnosticLogPath: "/tmp/ssh.log", knownHostsPath: "/tmp/Application Support/known_hosts.snapshot",
+            authenticatedCallbackCommand: "exec /usr/bin/true")
     }
 
     func testTheExecutableIsTheSystemSSH() {
@@ -20,7 +22,7 @@ final class SSHCommandBuilderTests: XCTestCase {
         let arguments = try masterArguments(connection)
         XCTAssertTrue(arguments.contains("-M"))
         XCTAssertTrue(arguments.contains("-N"))
-        XCTAssertTrue(arguments.contains("ControlPath=/tmp/ctl"))
+        XCTAssertTrue(arguments.contains("ControlPath=\"/tmp/ctl\""))
     }
 
     func testSecuritySensitiveOptionsArePresent() throws {
@@ -30,11 +32,23 @@ final class SSHCommandBuilderTests: XCTestCase {
         XCTAssertTrue(arguments.contains("ConnectTimeout=10"))
     }
 
-    func testTurningOffStrictCheckingStillRefusesAChangedKey() throws {
+    func testMasterAndUnlockIgnoreSSHConfigAndUseOnlyTheAppKnownHostsFile() throws {
+        let expectedKnownHosts = "UserKnownHostsFile=\"/tmp/Application Support/known_hosts.snapshot\""
+
+        for arguments in [try masterArguments(connection), try unlockArguments(connection)] {
+            let configIndex = try XCTUnwrap(arguments.firstIndex(of: "-F"))
+            XCTAssertEqual(arguments[configIndex + 1], "/dev/null")
+            XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
+            XCTAssertTrue(arguments.contains(expectedKnownHosts))
+        }
+    }
+
+    func testLegacyTrustOnFirstUseSettingStillRequiresAnApprovedKey() throws {
         var relaxed = connection
         relaxed.strictHostKeyChecking = false
         let arguments = try masterArguments(relaxed)
-        XCTAssertTrue(arguments.contains("StrictHostKeyChecking=accept-new"))
+        XCTAssertTrue(arguments.contains("StrictHostKeyChecking=yes"))
+        XCTAssertFalse(arguments.contains("StrictHostKeyChecking=accept-new"))
         XCTAssertFalse(arguments.contains("StrictHostKeyChecking=no"))
     }
 
@@ -75,7 +89,9 @@ final class SSHCommandBuilderTests: XCTestCase {
     // MARK: - Unlock mode
 
     private func unlockArguments(_ connection: SSHConnection) throws -> [String] {
-        try SSHCommandBuilder.unlockArguments(for: connection, connectTimeout: 10)
+        try SSHCommandBuilder.unlockArguments(for: connection, connectTimeout: 10,
+            diagnosticLogPath: "/tmp/ssh.log", knownHostsPath: "/tmp/Application Support/known_hosts.snapshot",
+            authenticatedCallbackCommand: "exec /usr/bin/true")
     }
 
     func testUnlockingRunsNoRemoteCommandAndLeavesNothingBehind() throws {
@@ -85,11 +101,16 @@ final class SSHCommandBuilderTests: XCTestCase {
         XCTAssertFalse(arguments.contains { $0.hasPrefix("ControlPath=") })
     }
 
-    /// Without this, a machine that hangs up the instant it accepts the
-    /// password is indistinguishable from one that rejected it.
-    func testBothModesAskSSHToAnnounceThatItAuthenticated() throws {
-        XCTAssertTrue(try unlockArguments(connection).contains("LogLevel=VERBOSE"))
-        XCTAssertTrue(try masterArguments(connection).contains("LogLevel=VERBOSE"))
+    func testBothModesUseFixedAuthenticatedCallbackBeforeDefaultProhibition() throws {
+        for arguments in [try unlockArguments(connection), try masterArguments(connection)] {
+            let firstPermit = try XCTUnwrap(arguments.first { $0.hasPrefix("PermitLocalCommand=") })
+            XCTAssertEqual(firstPermit, "PermitLocalCommand=yes")
+            XCTAssertTrue(arguments.contains("LocalCommand=exec /usr/bin/true"))
+            XCTAssertTrue(arguments.contains("LogLevel=VERBOSE"))
+        }
+        let attach = SSHCommandBuilder.attachArguments(for: connection, controlPath: "/tmp/ctl")
+        XCTAssertEqual(attach.first { $0.hasPrefix("PermitLocalCommand=") }, "PermitLocalCommand=no")
+        XCTAssertFalse(attach.contains { $0.hasPrefix("LocalCommand=") })
     }
 
     func testUnlockingKeepsTheSameSecurityOptions() throws {
@@ -131,17 +152,60 @@ final class SSHCommandBuilderTests: XCTestCase {
     func testControlCommandsTargetTheSameSocket() {
         let arguments = SSHCommandBuilder.controlArguments(
             for: connection, controlPath: "/tmp/ctl", command: "check")
-        XCTAssertTrue(arguments.contains("ControlPath=/tmp/ctl"))
+        XCTAssertTrue(arguments.contains("ControlPath=\"/tmp/ctl\""))
+        XCTAssertTrue(arguments.contains("-F"))
+        XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
         let commandIndex = arguments.firstIndex(of: "-O")
         XCTAssertNotNil(commandIndex)
         XCTAssertEqual(arguments[commandIndex! + 1], "check")
     }
 
+    func testAbandonedControlCleanupUsesTheSameIsolation() {
+        let arguments = SSHCommandBuilder.abandonedControlArguments(controlPath: "/tmp/ctl")
+        XCTAssertTrue(arguments.contains("-F"))
+        XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
+        XCTAssertTrue(arguments.contains("ControlPath=\"/tmp/ctl\""))
+        XCTAssertTrue(arguments.contains("abandoned-session"))
+    }
+
     func testTheTerminalSessionAttachesRatherThanBecomingASecondMaster() {
         let arguments = SSHCommandBuilder.attachArguments(for: connection, controlPath: "/tmp/ctl")
         XCTAssertTrue(arguments.contains("ControlMaster=no"))
+        XCTAssertTrue(arguments.contains("BatchMode=yes"))
+        XCTAssertTrue(arguments.contains("ProxyCommand=/usr/bin/false"))
+        XCTAssertTrue(arguments.contains("-F"))
+        XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
         XCTAssertFalse(arguments.contains("-M"))
         XCTAssertFalse(arguments.contains("-N"))
         XCTAssertEqual(arguments.last, "10.0.0.4")
     }
+    func testAuthenticationPolicyIsFixedAndInternalLogsAreSeparate() throws {
+        for arguments in [try masterArguments(connection), try unlockArguments(connection)] {
+            for required in ["HostKeyAlgorithms=ssh-ed25519", "VerifyHostKeyDNS=no",
+                             "UpdateHostKeys=no", "ForwardAgent=no", "ForwardX11=no",
+                             "ClearAllForwardings=yes", "GSSAPIDelegateCredentials=no", "AddKeysToAgent=no"] {
+                XCTAssertTrue(arguments.contains(required), required)
+            }
+            let logFlag = try XCTUnwrap(arguments.firstIndex(of: "-E"))
+            XCTAssertEqual(arguments[logFlag + 1], "/tmp/ssh.log")
+        }
+    }
+
+    func testSSHParsesSnapshotPathWithSpacesAsOneTrustFile() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        let snapshot = "/private/tmp/Application Support/audit-known-hosts"
+        process.arguments = ["-G"] + (try SSHCommandBuilder.unlockArguments(
+            for: connection, connectTimeout: 10, diagnosticLogPath: "/dev/null", knownHostsPath: snapshot,
+            authenticatedCallbackCommand: "exec /usr/bin/true"))
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        XCTAssertTrue(text.split(separator: "\n").contains("userknownhostsfile \(snapshot)"), text)
+    }
+
 }

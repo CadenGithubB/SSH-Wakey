@@ -6,12 +6,14 @@ struct ContentView: View {
 
     let store: ConnectionStore
     let sessions: SSHSessionManager
+    let security: AppSecurityCoordinator
 
     @State private var selection: Set<SSHConnection.ID> = []
     @State private var sheet: SheetKind?
     /// One or more connections awaiting a Remove confirmation.
-    @State private var removalTargets: [SSHConnection]?
+    @State private var removalTargets: RemovalRequest?
     @State private var showsColumnPicker = false
+    @State private var accessGeneration = UUID()
 
     /// The one row whose details are on show. Everything else is masked, and
     /// revealing a row hides whichever was revealed before, so at most one
@@ -24,24 +26,34 @@ struct ContentView: View {
     @State private var columns = TableColumnCustomization<SSHConnection>()
     @AppStorage("columnLayout.v2") private var storedColumnLayout = Data()
 
+    private struct RemovalRequest {
+        let ids: Set<SSHConnection.ID>
+        let generation: UUID
+    }
+
     enum SheetKind: Identifiable {
         case add
-        case edit(SSHConnection)
-        case password(SSHConnection)
-        case hostKey(SSHConnection)
-        case activity(SSHConnection)
+        case edit(SSHConnection.ID)
+        case hostKey(SSHConnection.ID)
+        case activity(SSHConnection.ID)
         case unlock
         case help
 
         var id: String {
             switch self {
             case .add: return "add"
-            case .edit(let connection): return "edit-\(connection.id)"
-            case .password(let connection): return "password-\(connection.id)"
-            case .hostKey(let connection): return "hostkey-\(connection.id)"
-            case .activity(let connection): return "activity-\(connection.id)"
+            case .edit(let id): return "edit-\(id)"
+            case .hostKey(let id): return "hostkey-\(id)"
+            case .activity(let id): return "activity-\(id)"
             case .unlock: return "unlock"
             case .help: return "help"
+            }
+        }
+
+        var requiresOpenAccess: Bool {
+            switch self {
+            case .unlock, .help: return false
+            default: return true
             }
         }
     }
@@ -72,21 +84,26 @@ struct ContentView: View {
             StatusPanel(
                 connection: selectedConnection,
                 state: selectedState,
-                storageError: store.storageError,
+                storageError: store.isUnavailable ? nil : store.storageError,
                 actionError: sessions.lastActionError,
                 redactsAddresses: !isRevealed(selectedConnection?.id),
                 selectedCount: selection.count,
                 isManagedCatalog: store.isManagedBuild,
                 assignedCount: store.connections.count,
+                fileUnavailable: store.isUnavailable,
                 onCancel: {
                     if let id = selectedConnection?.id { sessions.cancelConnect(id) }
                 },
-                onReviewHostKey: { if let connection = selectedConnection { sheet = .hostKey(connection) } },
+                onReviewHostKey: {
+                    guard authorizeAction(), let connection = selectedConnection else { return }
+                    sheet = .hostKey(connection.id)
+                },
                 onShowHelp: { sheet = .help })
             Divider()
             controls
         }
         .frame(minWidth: Column.minimumWindowWidth, minHeight: 480)
+        .disabled(store.isAuthenticating && !store.isLocked)
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.sessions = sessions
             AppDelegate.bringToFront()
@@ -95,7 +112,9 @@ struct ContentView: View {
             }
             restoreColumnLayout()
             sessions.forcesUnlock = store.isManagedBuild
-            Task { await SSHSessionManager.sweepAbandonedSessions() }
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+                Task { await SSHSessionManager.sweepAbandonedSessions(in: SSHSessionManager.temporaryRoot) }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             store.reloadManagedPolicy()
@@ -105,6 +124,14 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showWakeyHelp)) { _ in
             sheet = .help
         }
+        .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in
+            accessGeneration = UUID()
+            sheet = nil
+            selection = []
+            removalTargets = nil
+            revealedRow = nil
+            showsColumnPicker = false
+        }
         .sheet(item: $sheet, content: sheetContent)
         .alert(
             removalAlertTitle,
@@ -112,21 +139,26 @@ struct ContentView: View {
                 get: { removalTargets != nil },
                 set: { if !$0 { removalTargets = nil } }),
             presenting: removalTargets
-        ) { targets in
+        ) { request in
             Button("Remove", role: .destructive) {
-                let ids = Set(targets.map(\.id))
-                store.remove(ids: ids)
-                selection.subtract(ids)
+                guard authorizeAction(generation: request.generation) else { return }
+                let targets = request.ids.compactMap { store.connection(with: $0) }
+                guard targets.count == request.ids.count,
+                      !targets.contains(where: { sessions.state(for: $0.id).isConnected
+                          || sessions.state(for: $0.id).isConnecting }) else { return }
+                store.remove(ids: request.ids)
+                selection.subtract(request.ids)
                 removalTargets = nil
             }
             Button("Cancel", role: .cancel) { removalTargets = nil }
-        } message: { targets in
-            Text(removalAlertMessage(for: targets))
+        } message: { request in
+            Text(removalAlertMessage(for: request.ids.compactMap { store.connection(with: $0) }))
         }
     }
 
     private var removalAlertTitle: String {
-        guard let targets = removalTargets else { return "Remove?" }
+        guard let request = removalTargets else { return "Remove?" }
+        let targets = request.ids.compactMap { store.connection(with: $0) }
         if targets.count == 1 {
             return "Remove “\(targets[0].name)”?"
         }
@@ -149,15 +181,32 @@ struct ContentView: View {
 
     @ViewBuilder
     private var listArea: some View {
-        if store.isLocked {
+        if store.isUnavailable {
             ContentUnavailableView {
                 Label(
-                    store.storageError == nil
+                    "The saved connections file could not be opened",
+                    systemImage: "exclamationmark.shield.fill")
+            } description: {
+                if let storageError = store.storageError {
+                    Text(storageError)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .controlBackgroundColor))
+        } else if store.isLocked {
+            ContentUnavailableView {
+                Label(
+                    store.isAppLockEnabled ? "SSH-Wakey is locked" : store.storageError == nil
                         ? "Your connections are encrypted"
                         : "The encrypted file could not be opened",
                     systemImage: store.storageError == nil ? "lock.fill" : "exclamationmark.shield.fill")
             } description: {
-                if let storageError = store.storageError {
+                if store.isAppLockEnabled {
+                    Text("Use Touch ID or your Mac login password to unlock. SSH-Wakey locks after five minutes without activity, and when your Mac locks, sleeps or switches users.")
+                    if let error = security.authenticationError ?? store.storageError {
+                        Text(error)
+                    }
+                } else if let storageError = store.storageError {
                     Text(storageError)
                     Text("If you still have the recovery passphrase, Unlock may open an undamaged "
                          + "key slot. If the sealed contents themselves were altered, restore from "
@@ -167,7 +216,18 @@ struct ContentView: View {
                          + "opened automatically. Your recovery passphrase will open them.")
                 }
             } actions: {
-                Button("Unlock…") { sheet = .unlock }
+                if store.isAppLockEnabled {
+                    if store.isAuthenticating {
+                        ProgressView().controlSize(.small)
+                        Button("Cancel", action: security.lockNow)
+                    } else {
+                        Button("Unlock SSH-Wakey") { Task { await security.unlock() } }
+                            .buttonStyle(.borderedProminent)
+                        Button("Use Recovery Passphrase…") { sheet = .unlock }
+                    }
+                } else {
+                    Button("Unlock…") { sheet = .unlock }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -187,7 +247,10 @@ struct ContentView: View {
                 }
             } actions: {
                 if !store.isManagedBuild {
-                    Button("Add a Connection") { sheet = .add }
+                    Button("Add a Connection") {
+                        guard authorizeAction() else { return }
+                        sheet = .add
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -307,6 +370,7 @@ struct ContentView: View {
             .disabledCustomizationBehavior(.visibility)
         }
         .contextMenu(forSelectionType: SSHConnection.ID.self) { ids in
+            let generation = accessGeneration
             let connections = ids.compactMap { store.connection(with: $0) }
             if connections.count == 1, let connection = connections.first {
                 let id = connection.id
@@ -317,29 +381,44 @@ struct ContentView: View {
                            ? "Open in Terminal"
                            : connection.connectMode.buttonTitle)
                 ) {
-                    activate(connection)
+                    guard authorizeAction(generation: generation),
+                          let current = store.connection(with: id) else { return }
+                    activate(current)
                 }
                 if !store.isManagedBuild {
-                    Button("Edit…") { sheet = .edit(connection) }
+                    Button("Edit…") {
+                        guard authorizeAction(generation: generation),
+                              store.connection(with: id) != nil else { return }
+                        sheet = .edit(id)
+                    }
                         .disabled(sessions.state(for: id).isConnected
                                   || sessions.state(for: id).isConnecting)
                 }
                 Button(isRevealed(id) ? "Hide Details" : "Show Details") {
+                    guard authorizeAction(generation: generation) else { return }
                     toggleReveal(id)
                 }
                 if store.allowsDiagnostics {
-                    Button("Activity…") { sheet = .activity(connection) }
+                    Button("Activity…") {
+                        guard authorizeAction(generation: generation),
+                              store.connection(with: id) != nil else { return }
+                        sheet = .activity(id)
+                    }
                 }
                 if !store.isManagedBuild {
                     Divider()
-                    Button("Remove…", role: .destructive) { removalTargets = [connection] }
+                    Button("Remove…", role: .destructive) {
+                        requestRemoval([id], generation: generation)
+                    }
                         .disabled(sessions.state(for: id).isConnected
                                   || sessions.state(for: id).isConnecting)
                 }
             } else if !store.isManagedBuild, connections.count > 1 {
                 // Multi-select is for batch delete only. Connect and Edit need
                 // one machine; offering them for a set would mean guessing.
-                Button("Remove…", role: .destructive) { removalTargets = connections }
+                Button("Remove…", role: .destructive) {
+                    requestRemoval(ids, generation: generation)
+                }
                     .disabled(connections.contains {
                         let state = sessions.state(for: $0.id)
                         return state.isConnected || state.isConnecting
@@ -347,7 +426,7 @@ struct ContentView: View {
             }
         } primaryAction: { ids in
             // Double-click only when one row is involved.
-            guard ids.count == 1,
+            guard authorizeAction(), ids.count == 1,
                   let id = ids.first,
                   let connection = store.connection(with: id) else { return }
             selection = [id]
@@ -362,6 +441,7 @@ struct ContentView: View {
 
     /// Reveals one row and hides whatever was revealed before.
     private func toggleReveal(_ id: SSHConnection.ID) {
+        guard authorizeAction(), store.connection(with: id) != nil else { return }
         revealedRow = revealedRow == id ? nil : id
     }
 
@@ -372,7 +452,10 @@ struct ContentView: View {
     /// button owns the mouse event, so the eye still works.
     private func hideButton(for connection: SSHConnection) -> some View {
         let shown = isRevealed(connection.id)
+        let generation = accessGeneration
         return RevealToggleControl(isRevealed: shown) {
+            guard authorizeAction(generation: generation),
+                  store.connection(with: connection.id) != nil else { return }
             selection = [connection.id]
             toggleReveal(connection.id)
         }
@@ -461,23 +544,29 @@ struct ContentView: View {
     private var controls: some View {
         HStack(spacing: 10) {
             if !store.isManagedBuild {
-                Button("Add") { sheet = .add }
-                    .disabled(store.isLocked)
+                Button("Add") {
+                    guard authorizeAction() else { return }
+                    sheet = .add
+                }
+                    .disabled(store.isLocked || store.isUnavailable)
 
                 // Edit only when exactly one row is selected. Remove works for one
                 // or many. Both are absent rather than dimmed when there is nothing
                 // to act on.
                 if let connection = selectedConnection {
-                    Button("Edit") { sheet = .edit(connection) }
-                        .disabled(store.isLocked || selectedState.isConnected
+                    Button("Edit") {
+                        guard authorizeAction(), store.connection(with: connection.id) != nil else { return }
+                        sheet = .edit(connection.id)
+                    }
+                        .disabled(store.isLocked || store.isUnavailable || selectedState.isConnected
                                   || selectedState.isConnecting)
                 }
 
                 if !selectedConnections.isEmpty {
                     Button(selection.count == 1 ? "Remove" : "Remove (\(selection.count))") {
-                        removalTargets = selectedConnections
+                        requestRemoval(selection, generation: accessGeneration)
                     }
-                    .disabled(store.isLocked || selectionIsBusy)
+                    .disabled(store.isLocked || store.isUnavailable || selectionIsBusy)
                 }
             }
 
@@ -494,6 +583,11 @@ struct ContentView: View {
             }
             .buttonStyle(.borderless)
             .help("Settings")
+
+            if store.isAppLockEnabled && !store.isLocked {
+                Button("Lock", systemImage: "lock.fill", action: security.lockNow)
+                    .help("Lock SSH-Wakey and disconnect SSH sessions")
+            }
 
             Spacer()
 
@@ -521,6 +615,7 @@ struct ContentView: View {
                 }
                 if !store.isManagedBuild {
                     Button("Open in Terminal") {
+                        guard authorizeAction() else { return }
                         sessions.openInTerminal(connection.id)
                     }
                     .keyboardShortcut(.defaultAction)
@@ -536,7 +631,7 @@ struct ContentView: View {
                     .pickerStyle(.menu)
                     .labelsHidden()
                     .fixedSize()
-                    .disabled(store.isLocked)
+                    .disabled(store.isLocked || store.isUnavailable)
                     .help(connection.connectMode.explanation)
                 }
 
@@ -544,7 +639,7 @@ struct ContentView: View {
                     activate(connection)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(store.isLocked)
+                .disabled(store.isLocked || store.isUnavailable)
             }
         }
     }
@@ -553,70 +648,80 @@ struct ContentView: View {
 
     @ViewBuilder
     private func sheetContent(_ kind: SheetKind) -> some View {
+        // A previously tracked menu or presentation callback must not recreate
+        // a sheet holding destination details after the app has locked.
+        if !kind.requiresOpenAccess || (store.access == .open && !store.isAuthenticating) {
+            authorizedSheetContent(kind)
+        }
+    }
+
+    @ViewBuilder
+    private func authorizedSheetContent(_ kind: SheetKind) -> some View {
+        let generation = accessGeneration
         switch kind {
         case .add:
             ConnectionEditorView(
                 connection: SSHConnection(),
                 title: "New Connection",
                 onSave: { connection in
+                    guard authorizeAction(generation: generation) else { return }
                     store.add(connection)
                     selection = [connection.id]
                     sheet = nil
                 },
                 onCancel: { sheet = nil })
 
-        case .edit(let existing):
-            ConnectionEditorView(
-                connection: existing,
-                title: "Edit Connection",
-                onSave: { connection in
-                    store.update(connection)
-                    sheet = nil
-                },
-                onCancel: { sheet = nil })
+        case .edit(let id):
+            if let existing = store.connection(with: id) {
+                ConnectionEditorView(
+                    connection: existing,
+                    title: "Edit Connection",
+                    onSave: { connection in
+                        guard authorizeAction(generation: generation),
+                              store.connection(with: id) != nil else { return }
+                        store.update(connection)
+                        sheet = nil
+                    },
+                    onCancel: { sheet = nil })
+            }
 
-        case .password(let connection):
-            PasswordPromptView(
-                connection: connection,
-                allowsModeSwitch: !store.isManagedBuild,
-                onConnect: { entered, mode in
-                    sheet = nil
-                    var latest = store.connection(with: connection.id) ?? connection
-                    if !store.isManagedBuild, latest.connectMode != mode {
-                        latest.connectMode = mode
-                        store.update(latest)
-                        latest = store.connection(with: connection.id) ?? latest
-                    }
-                    sessions.connect(
-                        latest, password: SecureBuffer(entered), mode: store.isManagedBuild ? .unlock : mode)
-                },
-                onCancel: { sheet = nil })
+        case .hostKey(let id):
+            if let connection = store.connection(with: id) {
+                HostKeyApprovalView(
+                    connection: connection,
+                    authorize: { authorizeAction(generation: generation) },
+                    onTrusted: {
+                        guard authorizeAction(generation: generation) else { return }
+                        // Dismiss first. Swapping one sheet straight for another
+                        // can leave the second one unpresented on macOS.
+                        sheet = nil
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 350_000_000)
+                            guard generation == accessGeneration,
+                                  let saved = store.connection(with: id) else { return }
+                            startConnection(saved)
+                        }
+                    },
+                    onCancel: { sheet = nil })
+            }
 
-        case .hostKey(let connection):
-            HostKeyApprovalView(
-                connection: connection,
-                onTrusted: {
-                    // Dismiss first. Swapping one sheet straight for another
-                    // can leave the second one unpresented on macOS.
-                    sheet = nil
-                    Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 350_000_000)
-                        sheet = .password(store.connection(with: connection.id) ?? connection)
-                    }
-                },
-                onCancel: { sheet = nil })
-
-        case .activity(let connection):
-            ActivityLogView(
-                connection: connection,
-                entries: sessions.diagnostics(for: connection.id),
-                onDismiss: { sheet = nil })
+        case .activity(let id):
+            if let connection = store.connection(with: id) {
+                ActivityLogView(
+                    connection: connection,
+                    entries: sessions.diagnostics(for: connection.id),
+                    onDismiss: { sheet = nil })
+            }
 
         case .unlock:
             PassphraseSheet(
                 purpose: .unlock,
                 onSubmit: { entry in
+                    // Recovery deliberately operates while locked, but a sheet
+                    // invalidated by a later lock cannot restore the vault.
+                    guard generation == accessGeneration else { return }
                     try store.unlock(withPassphrase: entry.new)
+                    security.refresh()
                     sheet = nil
                 },
                 onCancel: { sheet = nil })
@@ -634,15 +739,21 @@ struct ContentView: View {
         Binding(
             get: { selectedConnection?.connectMode ?? .unlock },
             set: { newMode in
-                guard var connection = selectedConnection,
+                guard authorizeAction(), var connection = selectedConnection,
                       connection.connectMode != newMode else { return }
                 connection.connectMode = newMode
                 store.update(connection)
             })
     }
 
+    private func startConnection(_ connection: SSHConnection) {
+        guard authorizeAction(), let current = store.connection(with: connection.id) else { return }
+        sessions.connect(current, mode: store.isManagedBuild ? .unlock : current.connectMode)
+    }
+
     /// Connect, or open a terminal when the session is already up.
     private func activate(_ connection: SSHConnection) {
+        guard authorizeAction(), let current = store.connection(with: connection.id) else { return }
         switch sessions.state(for: connection.id) {
         case .connected:
             if store.isManagedBuild { break }
@@ -650,8 +761,19 @@ struct ContentView: View {
         case .connecting:
             break
         case .idle, .failed, .unlocked:
-            sheet = .password(store.connection(with: connection.id) ?? connection)
+            startConnection(current)
         }
+    }
+
+    private func authorizeAction(generation: UUID? = nil) -> Bool {
+        guard generation == nil || generation == accessGeneration else { return false }
+        return security.authorizeCurrentAccess()
+    }
+
+    private func requestRemoval(_ ids: Set<SSHConnection.ID>, generation: UUID) {
+        guard authorizeAction(generation: generation), !ids.isEmpty,
+              ids.allSatisfy({ store.connection(with: $0) != nil }) else { return }
+        removalTargets = RemovalRequest(ids: ids, generation: generation)
     }
 }
 

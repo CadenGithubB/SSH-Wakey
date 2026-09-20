@@ -40,7 +40,7 @@ final class ValidationTests: XCTestCase {
     }
 
     func testUsernamesThatCouldBeMisreadAreRejected() {
-        for candidate in ["-oProxyCommand=x", "mor gan", "admin@host", "user:name", "a/b", "tab\there"] {
+        for candidate in ["-oProxyCommand=x", "mor gan", "admin@host", "user:name", "a/b", "tab\there", "user;id", "user$(id)", "user`id`", "user%h"] {
             XCTAssertFalse(ConnectionValidator.isValidUsername(candidate), candidate)
         }
     }
@@ -52,13 +52,13 @@ final class ValidationTests: XCTestCase {
     }
 
     func testHostsThatCouldBeMisreadAreRejected() {
-        for candidate in ["-oProxyCommand=touch /tmp/x", "host name", "user@host", "a/b", "host\nname"] {
+        for candidate in ["-oProxyCommand=touch /tmp/x", "host name", "user@host", "a/b", "host\nname", "host,*", "*.example.com", "host;id", "host$(id)", "host?", "host%h", "[::1]:2222", "host..local"] {
             XCTAssertFalse(ConnectionValidator.isValidHost(candidate), candidate)
         }
     }
 
     func testOrdinaryHostsAreAccepted() {
-        for candidate in ["10.0.0.4", "mac.local", "build-01.example.internal", "fe80::1", "::1"] {
+        for candidate in ["10.0.0.4", "mac.local", "build-01.example.internal", "fe80::1", "::1", "[::1]", "fe80::1%en0"] {
             XCTAssertTrue(ConnectionValidator.isValidHost(candidate), candidate)
         }
     }

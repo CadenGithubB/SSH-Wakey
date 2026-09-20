@@ -13,7 +13,7 @@ final class AbandonedSessionTests: XCTestCase {
     override func setUp() async throws {
         directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("SSH-WakeyAbandoned-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try ProtectedFile.createPrivateDirectory(at: directory)
     }
 
     override func tearDown() async throws {
@@ -23,10 +23,10 @@ final class AbandonedSessionTests: XCTestCase {
     private func session(owner: pid_t?, modified: Date? = nil) throws -> URL {
         let folder = directory.appendingPathComponent("s-\(UUID().uuidString.prefix(8))",
                                                       isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try ProtectedFile.createPrivateDirectory(at: folder)
         if let owner {
-            try Data(String(owner).utf8)
-                .write(to: folder.appendingPathComponent(SSHSessionManager.ownerFileName))
+            try ProtectedFile.write(Data(String(owner).utf8),
+                to: folder.appendingPathComponent(SSHSessionManager.ownerFileName))
         }
         if let modified {
             try FileManager.default.setAttributes(
@@ -75,6 +75,171 @@ final class AbandonedSessionTests: XCTestCase {
     }
 
     func testSweepingIsSafeWhenThereIsNothingThere() async {
-        await SSHSessionManager.sweepAbandonedSessions()
+        await SSHSessionManager.sweepAbandonedSessions(in: directory)
+    }
+
+    func testDisconnectAllAlsoCancelsAnAttemptBeforeItsTaskStarts() async {
+        let manager = SSHSessionManager()
+        let connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.invalid")
+        manager.connect(connection, mode: .unlock)
+        XCTAssertTrue(manager.state(for: connection.id).isConnecting)
+        manager.disconnectAll()
+        for _ in 0..<20 where manager.state(for: connection.id).isConnecting {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(manager.state(for: connection.id), .failed(SSHSessionManager.cancelledFailure))
+    }
+
+    func testAppLockRejectsConnectionAndTerminalRequestsAtTheModelBoundary() async {
+        var directoryRequests = 0
+        let manager = SSHSessionManager(makeSessionDirectory: {
+            directoryRequests += 1
+            throw POSIXError(.EACCES)
+        })
+        manager.forcesUnlock = false
+        XCTAssertFalse(manager.isAppLocked)
+        manager.setAppLocked(true)
+        let connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.invalid")
+        manager.connect(connection, mode: .session)
+        manager.openInTerminal(connection.id)
+        await Task.yield()
+        XCTAssertTrue(manager.isAppLocked)
+        XCTAssertEqual(directoryRequests, 0)
+        XCTAssertTrue(manager.states.isEmpty)
+        XCTAssertTrue(manager.diagnostics.isEmpty)
+        XCTAssertEqual(manager.activeSessionCount, 0)
+        XCTAssertNil(manager.lastActionError)
+    }
+
+    func testAppLockClearsRetainedFailureAndActionState() async {
+        let manager = SSHSessionManager()
+        var connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.invalid")
+        connection.username = "unsafe user"
+        manager.connect(connection, mode: .unlock)
+        for _ in 0..<20 where manager.state(for: connection.id).isConnecting {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard case .failed = manager.state(for: connection.id) else {
+            return XCTFail("The invalid fixture must fail without opening a connection")
+        }
+        manager.openInTerminal(connection.id)
+        XCTAssertNotNil(manager.lastActionError)
+        manager.setAppLocked(true)
+        XCTAssertTrue(manager.states.isEmpty)
+        XCTAssertTrue(manager.diagnostics.isEmpty)
+        XCTAssertNil(manager.lastActionError)
+        XCTAssertEqual(manager.state(for: connection.id), .idle)
+    }
+
+    func testLockBeforeTaskStartsCannotRestoreStateEvenAfterImmediateUnlock() async {
+        var directoryRequests = 0
+        let manager = SSHSessionManager(makeSessionDirectory: {
+            directoryRequests += 1
+            throw POSIXError(.EACCES)
+        })
+        let connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.invalid")
+        manager.connect(connection, mode: .unlock)
+        manager.setAppLocked(true)
+        manager.setAppLocked(false)
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(directoryRequests, 0)
+        XCTAssertTrue(manager.states.isEmpty)
+        XCTAssertTrue(manager.diagnostics.isEmpty)
+        XCTAssertEqual(manager.activeSessionCount, 0)
+    }
+
+    func testLateWakeFromBeforeLockCannotOverwriteOrCancelANewAttempt() async throws {
+        let firstWake = expectation(description: "First attempt is suspended before SSH")
+        let secondWake = expectation(description: "Fresh attempt is suspended before SSH")
+        var pending: [CheckedContinuation<Void, Never>] = []
+        var created: [URL] = []
+        let manager = SSHSessionManager(wake: { _, _ in
+            await withCheckedContinuation { continuation in
+                pending.append(continuation)
+                if pending.count == 1 { firstWake.fulfill() } else { secondWake.fulfill() }
+            }
+        }, makeSessionDirectory: {
+            let folder = self.directory.appendingPathComponent("s-\(UUID().uuidString)")
+            try ProtectedFile.createPrivateDirectory(at: folder)
+            created.append(folder)
+            return folder
+        })
+        defer { manager.setAppLocked(true) }
+        let connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.local")
+        manager.connect(connection, mode: .unlock)
+        await fulfillment(of: [firstWake], timeout: 2)
+        guard pending.count == 1, created.count == 1 else { return XCTFail("First wake did not suspend") }
+        manager.setAppLocked(true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: created[0].path))
+        XCTAssertTrue(manager.states.isEmpty)
+        manager.setAppLocked(false)
+        manager.connect(connection, mode: .unlock)
+        await fulfillment(of: [secondWake], timeout: 2)
+        guard pending.count == 2, created.count == 2 else {
+            pending.first?.resume()
+            return XCTFail("Unlock did not permit a fresh attempt")
+        }
+        pending[0].resume() // Deliberately ignores the old task's cancellation.
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertTrue(manager.state(for: connection.id).isConnecting)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: created[1].path))
+        // A stale task's defer must not remove the fresh task from the map.
+        manager.cancelConnect(connection.id)
+        pending[1].resume()
+        for _ in 0..<20 where manager.state(for: connection.id).isConnecting {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(manager.state(for: connection.id), .failed(SSHSessionManager.cancelledFailure))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: created[1].path))
+        XCTAssertEqual(manager.activeSessionCount, 0)
+    }
+
+    func testSweepingOnlyTheSuppliedRootPreservesLiveSessions() async throws {
+        let live = try session(owner: getpid())
+        let abandoned = try session(owner: try deadProcessID())
+        await SSHSessionManager.sweepAbandonedSessions(in: directory)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: live.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: abandoned.path))
+    }
+
+    func testSymlinkedSessionIsNeverFollowedOrSwept() async throws {
+        let target = try session(owner: getpid())
+        let link = directory.appendingPathComponent("s-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        XCTAssertFalse(SSHSessionManager.isAbandoned(link))
+        await SSHSessionManager.sweepAbandonedSessions(in: directory)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: target.path))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), target.path)
+    }
+
+    func testMalformedOwnerRecordsAreLeftAloneEvenWhenOld() throws {
+        for text in ["", "garbage", "-1", "0", "{}", "{\"pid\":\"not-a-pid\"}"] {
+            let folder = try session(owner: nil)
+            try ProtectedFile.write(Data(text.utf8), to: folder.appendingPathComponent(SSHSessionManager.ownerFileName))
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: folder.path)
+            XCTAssertFalse(SSHSessionManager.isAbandoned(folder), text)
+        }
+    }
+
+    func testSymlinkedOwnerRecordIsRefused() throws {
+        let folder = try session(owner: nil)
+        let target = directory.appendingPathComponent("owner-target")
+        try ProtectedFile.write(Data(String(try deadProcessID()).utf8), to: target)
+        let owner = folder.appendingPathComponent(SSHSessionManager.ownerFileName)
+        try FileManager.default.createSymbolicLink(at: owner, withDestinationURL: target)
+        XCTAssertFalse(SSHSessionManager.isAbandoned(folder))
+    }
+
+    func testJSONOwnerRequiresTheExactProcessStartTime() throws {
+        let current = try XCTUnwrap(ProcessIdentity.read(getpid()))
+        let folder = try session(owner: nil)
+        let owner = folder.appendingPathComponent(SSHSessionManager.ownerFileName)
+        try ProtectedFile.write(JSONEncoder().encode(current), to: owner)
+        XCTAssertFalse(SSHSessionManager.isAbandoned(folder))
+        let reused = ProcessIdentity(pid: current.pid, parent: current.parent, uid: current.uid,
+            startedSeconds: current.startedSeconds + 1, startedMicroseconds: current.startedMicroseconds,
+            path: current.path)
+        try ProtectedFile.write(JSONEncoder().encode(reused), to: owner)
+        XCTAssertTrue(SSHSessionManager.isAbandoned(folder), "a reused live PID does not own the older session")
     }
 }

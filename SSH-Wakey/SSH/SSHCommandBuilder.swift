@@ -69,12 +69,55 @@ enum ConnectMode: String, CaseIterable, Identifiable, Codable, Hashable, Sendabl
 
 /// Builds the argument arrays handed to `Process`.
 ///
-/// Every value goes into its own array element. Nothing is interpolated into a
-/// command string and no shell is ever involved, so a hostname or option value
-/// cannot turn into a second command.
+/// Connection fields are passed as argv, not shell syntax. The only local
+/// command is the fixed, quoted signed-helper authentication callback.
 enum SSHCommandBuilder {
 
     static let sshExecutable = "/usr/bin/ssh"
+
+    /// Do not inherit directives from the user's or system SSH config. The
+    /// connection fields and the checked extra-argument allow-list are the
+    /// complete policy for an SSH-Wakey connection.
+    ///
+    /// Host trust comes from a checked, private snapshot for each attempt.
+    private static let isolatedConfigurationArguments = [
+        "-F", "/dev/null",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "HostKeyAlgorithms=ssh-ed25519",
+        "-o", "VerifyHostKeyDNS=no",
+        "-o", "UpdateHostKeys=no",
+        "-o", "NoHostAuthenticationForLocalhost=no",
+        "-o", "ForwardAgent=no",
+        "-o", "ForwardX11=no",
+        "-o", "ForwardX11Trusted=no",
+        "-o", "ClearAllForwardings=yes",
+        "-o", "AddKeysToAgent=no",
+        "-o", "GSSAPIAuthentication=no",
+        "-o", "GSSAPIDelegateCredentials=no",
+        "-o", "HostbasedAuthentication=no",
+        "-o", "PermitLocalCommand=no",
+        "-o", "ProxyJump=none",
+    ]
+
+    /// `-o` values are parsed by ssh_config even when argv bypasses the shell.
+    /// Quote the path for that parser too: Application Support contains a space.
+    static func quotedConfigurationPath(_ path: String) -> String {
+        "\"" + path.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "%", with: "%%") + "\""
+    }
+
+    private static func authenticationArguments(knownHostsPath: String, diagnosticLogPath: String,
+                                                authenticatedCallbackCommand: String) -> [String] {
+        // OpenSSH uses the first value, so these fixed callback options precede
+        // the default prohibition used by control and Terminal invocations.
+        ["-o", "PermitLocalCommand=yes", "-o", "LocalCommand=\(authenticatedCallbackCommand)"]
+        + isolatedConfigurationArguments + [
+            "-o", "UserKnownHostsFile=\(quotedConfigurationPath(knownHostsPath))",
+            "-E", diagnosticLogPath,
+        ]
+    }
 
     /// The long-lived master connection. `-N` means no remote command is
     /// started, so this process exists only to hold the authenticated
@@ -83,25 +126,30 @@ enum SSHCommandBuilder {
     static func masterArguments(
         for connection: SSHConnection,
         controlPath: String,
-        connectTimeout: Int
+        connectTimeout: Int,
+        diagnosticLogPath: String,
+        knownHostsPath: String,
+        authenticatedCallbackCommand: String
     ) throws -> [String] {
         let candidate = connection.normalized
         var arguments = [
             "-M",
             "-N",
-            "-o", "ControlPath=\(controlPath)",
+        ]
+        arguments.append(contentsOf: authenticationArguments(
+            knownHostsPath: knownHostsPath, diagnosticLogPath: diagnosticLogPath,
+            authenticatedCallbackCommand: authenticatedCallbackCommand))
+        arguments.append(contentsOf: [
+            "-o", "ControlPath=\(quotedConfigurationPath(controlPath))",
             "-o", "ControlPersist=no",
-            "-o", "StrictHostKeyChecking=\(candidate.strictHostKeyChecking ? "yes" : "accept-new")",
             "-o", "NumberOfPasswordPrompts=1",
             "-o", "BatchMode=no",
             "-o", "ConnectTimeout=\(connectTimeout)",
-            // Makes ssh announce that it authenticated, so a machine that hangs
-            // up the instant it accepts the password is not mistaken for one
-            // that rejected it.
+            // Bounded diagnostic input is used for failure categories only.
             "-o", "LogLevel=VERBOSE",
             "-p", String(candidate.port),
             "-l", candidate.username,
-        ]
+        ])
         arguments.append(contentsOf: try SSHArgumentParser.parse(candidate.extraArguments))
         arguments.append(candidate.host)
         return arguments
@@ -109,26 +157,30 @@ enum SSHCommandBuilder {
 
     /// Logging in and nothing else.
     ///
-    /// No control socket and no multiplexing, because nothing is going to
-    /// attach to this. `LogLevel=VERBOSE` is what makes ssh announce that it
-    /// authenticated, which matters here: a Mac unlocking its disk closes the
-    /// connection the instant it accepts the password, so the exit code alone
-    /// cannot tell success from failure.
+    /// No control socket and no multiplexing. Authentication is proven by the
+    /// verified LocalCommand callback even if the remote closes immediately.
     static func unlockArguments(
         for connection: SSHConnection,
-        connectTimeout: Int
+        connectTimeout: Int,
+        diagnosticLogPath: String,
+        knownHostsPath: String,
+        authenticatedCallbackCommand: String
     ) throws -> [String] {
         let candidate = connection.normalized
         var arguments = [
             "-N",
-            "-o", "StrictHostKeyChecking=\(candidate.strictHostKeyChecking ? "yes" : "accept-new")",
+        ]
+        arguments.append(contentsOf: authenticationArguments(
+            knownHostsPath: knownHostsPath, diagnosticLogPath: diagnosticLogPath,
+            authenticatedCallbackCommand: authenticatedCallbackCommand))
+        arguments.append(contentsOf: [
             "-o", "NumberOfPasswordPrompts=1",
             "-o", "BatchMode=no",
             "-o", "ConnectTimeout=\(connectTimeout)",
             "-o", "LogLevel=VERBOSE",
             "-p", String(candidate.port),
             "-l", candidate.username,
-        ]
+        ])
         arguments.append(contentsOf: try SSHArgumentParser.parse(candidate.extraArguments))
         arguments.append(candidate.host)
         return arguments
@@ -141,12 +193,25 @@ enum SSHCommandBuilder {
         command: String
     ) -> [String] {
         let candidate = connection.normalized
-        return [
-            "-o", "ControlPath=\(controlPath)",
+        return isolatedConfigurationArguments + [
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ControlPath=\(quotedConfigurationPath(controlPath))",
             "-O", command,
             "-p", String(candidate.port),
             "-l", candidate.username,
             candidate.host,
+        ]
+    }
+
+    /// Closes an abandoned master without needing the original connection
+    /// fields. It still uses the same isolated policy as every other ssh
+    /// invocation made by the app.
+    static func abandonedControlArguments(controlPath: String) -> [String] {
+        isolatedConfigurationArguments + [
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ControlPath=\(quotedConfigurationPath(controlPath))",
+            "-O", "exit",
+            "abandoned-session",
         ]
     }
 
@@ -157,9 +222,13 @@ enum SSHCommandBuilder {
         controlPath: String
     ) -> [String] {
         let candidate = connection.normalized
-        return [
-            "-o", "ControlPath=\(controlPath)",
+        return isolatedConfigurationArguments + [
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ControlPath=\(quotedConfigurationPath(controlPath))",
             "-o", "ControlMaster=no",
+            "-o", "BatchMode=yes",
+            // A vanished master must not fall back to a fresh connection.
+            "-o", "ProxyCommand=/usr/bin/false",
             "-p", String(candidate.port),
             "-l", candidate.username,
             candidate.host,

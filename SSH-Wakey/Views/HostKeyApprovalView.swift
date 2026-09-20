@@ -5,6 +5,7 @@ import SwiftUI
 struct HostKeyApprovalView: View {
 
     let connection: SSHConnection
+    var authorize: () -> Bool = { true }
     var onTrusted: () -> Void
     var onCancel: () -> Void
 
@@ -16,13 +17,16 @@ struct HostKeyApprovalView: View {
 
     @State private var phase: Phase = .loading
     @State private var isWriting = false
+    @State private var expectedFingerprint = ""
+    @State private var scanTask: Task<Void, Never>?
+    @State private var isValid = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Host key for \(connection.host)")
                     .font(.headline)
-                Text("This machine is not in your known_hosts file yet.")
+                Text("This machine does not yet have an approved key in SSH-Wakey.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -42,20 +46,24 @@ struct HostKeyApprovalView: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button(isWriting ? "Adding…" : "Trust and Add") {
+                Button(isWriting ? "Adding…" : "Trust Verified Key") {
                     trust()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(isWriting || !hasKeys)
+                .disabled(isWriting || !hasVerifiedKey)
             }
             .padding(16)
         }
         .frame(width: 560)
-        .task { await load() }
+        .onAppear(perform: startScan)
+        .onDisappear(perform: invalidate)
+        .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in invalidate() }
     }
 
-    private var hasKeys: Bool {
-        if case .ready(let keys) = phase { return !keys.isEmpty }
+    private var hasVerifiedKey: Bool {
+        if case .ready(let keys) = phase, keys.count == 1 {
+            return expectedFingerprint.trimmingCharacters(in: .whitespacesAndNewlines) == keys[0].fingerprint
+        }
         return false
     }
 
@@ -90,7 +98,7 @@ struct HostKeyApprovalView: View {
 
                 Button("Try Again") {
                     phase = .loading
-                    Task { await load() }
+                    startScan()
                 }
             }
 
@@ -108,9 +116,9 @@ struct HostKeyApprovalView: View {
 
                 Label {
                     Text("""
-                    Fetching a fingerprint over the network does not prove it is genuine: whatever answers \
-                    that address supplies it. Compare it with the value printed on the machine itself, from \
-                    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub, before you trust it.
+                    On the Mac itself, run ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub. Enter its SHA256:… \
+                    fingerprint below. Obtain it directly from the Mac or a trusted administrator; the \
+                    fingerprint displayed above came from the network and is not proof of identity.
                     """)
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
@@ -119,21 +127,43 @@ struct HostKeyApprovalView: View {
                 }
                 .padding(10)
                 .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
+
+                TextField("Fingerprint independently obtained from the Mac", text: $expectedFingerprint)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textFieldStyle(.roundedBorder)
             }
         }
     }
 
     private func load() async {
+        guard isValid, authorize(), !Task.isCancelled else { return }
+        expectedFingerprint = ""
         do {
             let keys = try await HostKeyService.scan(host: connection.host, port: connection.port)
+            guard isValid, !Task.isCancelled, authorize() else { return }
             phase = .ready(keys)
         } catch {
+            guard isValid, !Task.isCancelled, authorize() else { return }
             phase = .failed(error.localizedDescription)
         }
     }
 
+    private func startScan() {
+        guard isValid, authorize() else { return }
+        scanTask?.cancel()
+        scanTask = Task { await load() }
+    }
+
+    private func invalidate() {
+        isValid = false
+        scanTask?.cancel()
+        scanTask = nil
+        expectedFingerprint = ""
+        phase = .loading
+    }
+
     private func trust() {
-        guard case .ready(let keys) = phase else { return }
+        guard isValid, authorize(), case .ready(let keys) = phase, hasVerifiedKey else { return }
         isWriting = true
         do {
             try HostKeyService.trust(keys)

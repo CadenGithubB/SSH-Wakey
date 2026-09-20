@@ -1,24 +1,17 @@
-import Darwin
+import CryptoKit
 import Foundation
 
-/// One public key offered by a server, with the fingerprint a person can read
-/// out loud and compare.
 struct HostKeyCandidate: Identifiable, Equatable, Sendable {
     let id = UUID()
-    /// The exact line that would be appended to `known_hosts`.
     let knownHostsLine: String
     let algorithm: String
     let bits: String
     let fingerprint: String
 }
 
-/// Fetches and records host keys for the strict checking flow.
-///
-/// Fetching a fingerprint over the network proves nothing on its own: whatever
-/// answers the address supplies it. The point of showing it is that the user
-/// can compare it with the value printed on the machine itself. The UI says so.
+/// Trust belongs to this app. A network scan supplies an untrusted Ed25519
+/// public key; the user must compare its fingerprint independently before enrollment.
 enum HostKeyService {
-
     enum HostKeyError: LocalizedError {
         case scanFailed(String)
         case noKeysOffered(String)
@@ -26,204 +19,161 @@ enum HostKeyService {
 
         var errorDescription: String? {
             switch self {
-            case .scanFailed(let reason):
-                return "The host key could not be fetched: \(reason)"
+            case .scanFailed(let reason): return "The host key could not be fetched: \(reason)"
             case .noKeysOffered(let host):
-                var text = "\(host) did not answer with a host key. It may not be running an SSH "
-                    + "server yet, or it may not be reachable from here."
+                var text = "\(host) did not answer with an Ed25519 host key. It may not be running an SSH server yet, or it may not be reachable from here."
                 if NetworkScope.isLocal(host) {
-                    text += " The first approach to a machine on your own network is also the one "
-                        + "macOS interrupts with its permission prompt, and that attempt fails "
-                        + "while the prompt is on screen. If you have just answered it, try again."
+                    text += " macOS may interrupt the first local connection with its permission prompt. If you have just answered it, try again."
                 }
                 return text
-            case .notWritten(let reason):
-                return "known_hosts could not be updated: \(reason)"
+            case .notWritten(let reason): return "SSH-Wakey’s host-key file could not be used: \(reason)"
             }
         }
     }
 
     static var knownHostsURL: URL {
         URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appendingPathComponent(".ssh/known_hosts")
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+            .appendingPathComponent(AppDistribution.supportFolderName, isDirectory: true)
+            .appendingPathComponent("known_hosts")
     }
 
-    /// How many times to ask before giving up.
     static let scanAttempts = 3
+    static let maximumStoreBytes = 1024 * 1024
 
-    /// Asks the machine for its host keys, retrying a couple of times.
-    ///
-    /// One attempt is not enough in practice. A first approach to a machine
-    /// fails for several reasons that clear by themselves: the address has not
-    /// been resolved yet, a route is cold, or macOS is holding up the
-    /// connection behind its local network permission prompt. All of those
-    /// succeed on a second try a moment later.
     static func scan(host: String, port: Int) async throws -> [HostKeyCandidate] {
+        guard ConnectionValidator.isValidHost(host), ConnectionValidator.portRange.contains(port) else {
+            throw HostKeyError.scanFailed("The destination is not valid.")
+        }
         var lastError: Error = HostKeyError.noKeysOffered(host)
-
         for attempt in 1...scanAttempts {
-            do {
-                return try await scanOnce(host: host, port: port)
-            } catch {
+            try Task.checkCancellation()
+            do { return try await scanOnce(host: host, port: port) }
+            catch {
                 lastError = error
                 guard attempt < scanAttempts else { break }
-                try? await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
             }
         }
         throw lastError
     }
 
     private static func scanOnce(host: String, port: Int) async throws -> [HostKeyCandidate] {
-        let scan: ProcessResult
-        do {
-            scan = try await ProcessRunner.run(
-                executable: "/usr/bin/ssh-keyscan",
-                arguments: ["-T", "8", "-p", String(port), host],
-                timeout: 15)
-        } catch {
-            throw HostKeyError.scanFailed(error.localizedDescription)
+        let canonical = ConnectionValidator.canonicalHost(host)
+        let result = try await ProcessRunner.run(
+            executable: "/usr/bin/ssh-keyscan",
+            arguments: ["-T", "8", "-t", "ed25519", "-p", String(port), canonical],
+            timeout: 15)
+        guard !result.timedOut, !result.outputLimitExceeded, result.exitCode == 0 else {
+            throw HostKeyError.noKeysOffered(host)
         }
-
-        let lines = scan.standardOutput
-            .split(separator: "\n")
+        let lines = result.standardOutput.split(separator: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-
-        guard !lines.isEmpty else {
-            let reason = scan.standardError.trimmingCharacters(in: .whitespacesAndNewlines)
-            throw reason.isEmpty ? HostKeyError.noKeysOffered(host) : HostKeyError.scanFailed(reason)
+        let expectedHost = port == 22 ? canonical : "[\(canonical)]:\(port)"
+        // A single algorithm and destination must yield exactly one key. Never
+        // approve additional keys merely because one displayed fingerprint matched.
+        guard lines.count == 1, let candidate = candidate(for: lines[0]),
+              lines[0].split(separator: " ").first.map(String.init) == expectedHost else {
+            throw HostKeyError.scanFailed("The scan did not return exactly one Ed25519 key for this destination.")
         }
-
-        let fingerprints = try await fingerprints(for: lines)
-        return zip(lines, fingerprints).map { line, detail in
-            HostKeyCandidate(
-                knownHostsLine: line,
-                algorithm: detail.algorithm,
-                bits: detail.bits,
-                fingerprint: detail.fingerprint)
-        }
+        return [candidate]
     }
 
-    /// Appends approved keys to `~/.ssh/known_hosts`, creating it if needed.
-    ///
-    /// Appended, not rewritten. Reading the file, adding a line and writing the
-    /// whole thing back would discard anything ssh recorded in between, replace
-    /// the file with a new inode, drop extended attributes, and turn a symlinked
-    /// known_hosts into a regular file. An `O_APPEND` write does none of that.
-    static func trust(_ candidates: [HostKeyCandidate], at url: URL = knownHostsURL) throws {
-        guard !candidates.isEmpty else { return }
-
-        for candidate in candidates where !isWellFormed(candidate.knownHostsLine) {
-            throw HostKeyError.notWritten(
-                "ssh-keyscan returned something that is not a host key line, so nothing was added.")
-        }
-
-        let directory = url.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            do {
-                try FileManager.default.createDirectory(
-                    at: directory, withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o700])
-            } catch {
-                throw HostKeyError.notWritten(error.localizedDescription)
-            }
-        }
-
-        var text = candidates.map(\.knownHostsLine).joined(separator: "\n") + "\n"
-        if endsWithoutNewline(url) { text = "\n" + text }
-
-        let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
-        guard descriptor >= 0 else {
-            throw HostKeyError.notWritten(String(cString: strerror(errno)))
-        }
-        defer { close(descriptor) }
-
-        let payload = Array(text.utf8)
-        var offset = 0
-        while offset < payload.count {
-            let written = payload.withUnsafeBytes { bytes in
-                Darwin.write(descriptor, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
-            }
-            if written > 0 {
-                offset += written
-                continue
-            }
-            if written < 0 && errno == EINTR { continue }
-            throw HostKeyError.notWritten(String(cString: strerror(errno)))
-        }
-    }
-
-    /// True when a new entry would otherwise be joined onto the last line.
-    private static func endsWithoutNewline(_ url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd(), size > 0 else { return false }
-        try? handle.seek(toOffset: size - 1)
-        return (try? handle.read(upToCount: 1)) != Data([0x0A])
-    }
-
-    /// A host pattern, a key type and base64 key material, on one line.
-    ///
-    /// The lines come from another machine by way of ssh-keyscan, and they are
-    /// about to be appended to the file that decides which servers are trusted.
-    /// Nothing that does not look exactly like an entry goes in.
-    static func isWellFormed(_ line: String) -> Bool {
-        guard !line.isEmpty, line.utf8.count <= 8192 else { return false }
-        guard !line.unicodeScalars.contains(where: { $0.properties.generalCategory == .control })
-        else { return false }
-
-        // ssh-keyscan writes exactly three fields. Anything else is not what
-        // this is for, and the file is too important to be lenient with.
-        let fields = line.split(separator: " ").map(String.init)
-        guard fields.count == 3 else { return false }
-
-        let keyType = fields[1]
-        guard keyType.hasPrefix("ssh-") || keyType.hasPrefix("ecdsa-") || keyType.hasPrefix("sk-")
-        else { return false }
-
-        let material = fields[2]
-        let base64 = CharacterSet(
-            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
-        return !material.isEmpty && material.unicodeScalars.allSatisfy(base64.contains)
-    }
-
-    struct Detail: Equatable {
-        var bits: String
-        var fingerprint: String
-        var algorithm: String
-    }
-
-    /// `ssh-keygen -l` reads every line from stdin and prints one fingerprint
-    /// per line, in order.
-    private static func fingerprints(for lines: [String]) async throws -> [Detail] {
-        let input = Data((lines.joined(separator: "\n") + "\n").utf8)
-        let result: ProcessResult
+    /// Called before every authentication attempt. ssh receives this checked,
+    /// immutable snapshot, so it neither follows the live trust-store path nor
+    /// writes trust automatically. Absence gives an empty strict-checking store.
+    static func prepareTrustSnapshot(in directory: URL, from source: URL = knownHostsURL) throws -> URL {
         do {
-            result = try await ProcessRunner.run(
-                executable: "/usr/bin/ssh-keygen",
-                arguments: ["-l", "-f", "-"],
-                input: input,
-                timeout: 15)
+            try ProtectedFile.createPrivateDirectory(at: source.deletingLastPathComponent())
+            let data = try ProtectedFile.read(from: source, maximumBytes: maximumStoreBytes) ?? Data()
+            _ = try entries(in: data)
+            try ProtectedFile.createPrivateDirectory(at: directory)
+            let snapshot = directory.appendingPathComponent("known_hosts.snapshot")
+            try ProtectedFile.write(data, to: snapshot, mode: 0o400)
+            return snapshot
         } catch {
-            throw HostKeyError.scanFailed(error.localizedDescription)
+            throw HostKeyError.notWritten(error.localizedDescription)
         }
-
-        let parsed = result.standardOutput
-            .split(separator: "\n")
-            .compactMap { parseFingerprintLine(String($0)) }
-        guard parsed.count == lines.count else {
-            throw HostKeyError.scanFailed(
-                result.standardError.isEmpty
-                    ? "ssh-keygen did not describe every key." : result.standardError)
-        }
-        return parsed
     }
 
-    /// Parses `256 SHA256:abc… comment (ED25519)`.
-    static func parseFingerprintLine(_ line: String) -> Detail? {
-        let fields = line.split(separator: " ").map(String.init)
-        guard fields.count >= 3 else { return nil }
-        let algorithm = fields.last.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "()")) } ?? "unknown"
-        return Detail(bits: fields[0], fingerprint: fields[1], algorithm: algorithm)
+    /// Enroll only one independently verified key. Changed keys require an
+    /// explicit repair of the trust store; appending another trusted alternative
+    /// would silently defeat changed-host detection.
+    static func trust(_ candidates: [HostKeyCandidate], at url: URL = knownHostsURL) throws {
+        guard candidates.count == 1, let supplied = candidates.first,
+              let checked = candidate(for: supplied.knownHostsLine),
+              checked.fingerprint == supplied.fingerprint,
+              supplied.algorithm == "ED25519", supplied.bits == "256" else {
+            throw HostKeyError.notWritten("Exactly one verified Ed25519 host key is required.")
+        }
+        do {
+            try ProtectedFile.createPrivateDirectory(at: url.deletingLastPathComponent())
+            try ProtectedFile.update(at: url, maximumBytes: maximumStoreBytes) { previous in
+                var existing = try entries(in: previous ?? Data())
+                let host = checked.knownHostsLine.split(separator: " ")[0]
+                if let old = existing.first(where: { $0.knownHostsLine.split(separator: " ")[0] == host }) {
+                    guard old.knownHostsLine == checked.knownHostsLine else {
+                        throw HostKeyError.notWritten("The saved key for this destination is different. Verify the change independently before repairing the trust store.")
+                    }
+                    return previous ?? Data()
+                }
+                existing.append(checked)
+                let data = Data((existing.map(\.knownHostsLine).joined(separator: "\n") + "\n").utf8)
+                guard data.count <= maximumStoreBytes else {
+                    throw HostKeyError.notWritten("The host-key file is too large.")
+                }
+                return data
+            }
+        } catch let error as HostKeyError { throw error }
+        catch { throw HostKeyError.notWritten(error.localizedDescription) }
+    }
+
+    private static func entries(in data: Data) throws -> [HostKeyCandidate] {
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw HostKeyError.notWritten("The host-key file is not valid UTF-8.")
+        }
+        var result: [HostKeyCandidate] = []
+        var hosts = Set<String>()
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let key = candidate(for: String(line)),
+                  let host = line.split(separator: " ").first,
+                  hosts.insert(String(host)).inserted else {
+                throw HostKeyError.notWritten("The host-key file contains an invalid or duplicate destination.")
+            }
+            result.append(key)
+        }
+        return result
+    }
+
+    static func isWellFormed(_ line: String) -> Bool { candidate(for: line) != nil }
+
+    /// Validate the SSH wire-format Ed25519 blob and compute the exact public
+    /// key's SHA-256 fingerprint in process. No secondary command or output zip.
+    static func candidate(for line: String) -> HostKeyCandidate? {
+        guard !line.isEmpty, line.utf8.count <= 8192,
+              !line.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else { return nil }
+        let fields = line.split(separator: " ", omittingEmptySubsequences: false)
+        guard fields.count == 3, fields[1] == "ssh-ed25519", validHostField(String(fields[0])),
+              let blob = Data(base64Encoded: String(fields[2])), blob.count == 51 else { return nil }
+        let prefix: [UInt8] = [0, 0, 0, 11] + Array("ssh-ed25519".utf8) + [0, 0, 0, 32]
+        guard blob.prefix(prefix.count).elementsEqual(prefix), blob.base64EncodedString() == fields[2] else { return nil }
+        let fingerprint = Data(SHA256.hash(data: blob)).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "")
+        return HostKeyCandidate(knownHostsLine: line, algorithm: "ED25519", bits: "256",
+                                fingerprint: "SHA256:\(fingerprint)")
+    }
+
+    private static func validHostField(_ field: String) -> Bool {
+        if field.hasPrefix("["), let end = field.range(of: "]:") {
+            let host = String(field[field.index(after: field.startIndex)..<end.lowerBound])
+            let portText = String(field[end.upperBound...])
+            guard let port = Int(portText), String(port) == portText,
+                  ConnectionValidator.portRange.contains(port) else { return false }
+            return ConnectionValidator.isValidHost(host)
+                && ConnectionValidator.canonicalHost(host) == host
+        }
+        return ConnectionValidator.isValidHost(field)
+            && ConnectionValidator.canonicalHost(field) == field
     }
 }

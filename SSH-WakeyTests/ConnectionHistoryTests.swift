@@ -10,7 +10,7 @@ final class ConnectionHistoryTests: XCTestCase {
     override func setUp() async throws {
         directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("SSH-WakeyHistory-\(UUID().uuidString)", isDirectory: true)
-        store = ConnectionStore(fileStore: ConnectionFileStore(directoryURL: directory))
+        store = ConnectionStore(fileStore: ConnectionFileStore(directoryURL: directory), isManagedBuild: false)
     }
 
     override func tearDown() async throws {
@@ -61,14 +61,15 @@ final class ConnectionHistoryTests: XCTestCase {
         XCTAssertEqual(saved.modifiedAt, originalModified)
     }
 
-    func testTheHostKeyPolicyChangeIsRecordedInWords() throws {
+    func testHostKeyPolicyCannotBeDisabledByAnEdit() throws {
         store.add(makeConnection())
         var edited = try XCTUnwrap(store.connections.first)
         edited.strictHostKeyChecking = false
         store.update(edited)
 
-        let summary = try XCTUnwrap(store.connections.first?.revisions.first?.summary)
-        XCTAssertEqual(summary, "Known host key: required → trust on first use")
+        let saved = try XCTUnwrap(store.connections.first)
+        XCTAssertTrue(saved.strictHostKeyChecking)
+        XCTAssertTrue(saved.revisions.isEmpty, "a rejected weakening must not become an accepted edit")
     }
 
     func testChangingConnectModeIsRecordedInWords() throws {
@@ -117,7 +118,7 @@ final class ConnectionHistoryTests: XCTestCase {
         store.update(edited)
         let before = try XCTUnwrap(store.connections.first)
 
-        let reloaded = ConnectionStore(fileStore: ConnectionFileStore(directoryURL: directory))
+        let reloaded = ConnectionStore(fileStore: ConnectionFileStore(directoryURL: directory), isManagedBuild: false)
         let after = try XCTUnwrap(reloaded.connections.first)
 
         XCTAssertEqual(after, before, "dates are stored to the second so they round-trip exactly")
@@ -135,9 +136,9 @@ final class ConnectionHistoryTests: XCTestCase {
     func testAConnectionFromAnOlderBuildHasNoDatesRatherThanInventedOnes() throws {
         let fileStore = ConnectionFileStore(directoryURL: directory)
         try fileStore.createDirectoryIfNeeded()
-        try Data("""
+        try ProtectedFile.write(Data("""
         {"version":1,"connections":[{"name":"Old","username":"admin","host":"10.0.0.9"}]}
-        """.utf8).write(to: fileStore.fileURL)
+        """.utf8), to: fileStore.fileURL)
 
         let loaded = try XCTUnwrap(fileStore.load().first)
         XCTAssertNil(loaded.createdAt)

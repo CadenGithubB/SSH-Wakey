@@ -1,11 +1,12 @@
 import Foundation
 
-// `ssh` runs this same executable as its SSH_ASKPASS helper. That mode is
-// selected purely by the environment of the process ssh spawns, never by a
-// script or a marker file left on disk, and it has to finish before any UI
-// framework is initialised. So it is the very first thing main does.
-if let request = AskpassHelper.requestFromEnvironment() {
-    AskpassHelper.serve(request)
+// Password entry exists only in the separately sandboxed helper. Never fall
+// back to a password popup in the main application's process.
+let environment = ProcessInfo.processInfo.environment
+if environment[AskpassProtocol.socketEnvironmentKey] != nil
+    || environment[AskpassProtocol.nonceEnvironmentKey] != nil { exit(1) }
+guard AskpassHelper.disableCoreDumps() else {
+    fputs("SSH-Wakey could not disable core dumps.\n", stderr)
+    exit(1)
 }
-
 SSHWakeyApp.main()

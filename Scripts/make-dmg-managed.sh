@@ -1,46 +1,30 @@
 #!/bin/sh
-#
-# Builds a disk image for the IT Managed app.
-#
-# Writes build/SSH-Wakey-Managed.dmg
-#
-# Same repo and Xcode project as Standard. This script uses the
-# "SSH-Wakey Managed" scheme (bundle id com.CadenGithubB.sshwakey.managed).
-# The public app is:
-#   ./Scripts/make-dmg.sh
-#
-# Ad-hoc signed, not notarised. A Jamf policy that installs the .app as root
-# usually avoids Gatekeeper; a Self Service download of this image still gets
-# a quarantine flag. Developer ID and notarisation are a later step.
-
+# Build a verified local Managed app image. IT distribution still needs Developer
+# ID signing and notarization.
 set -eu
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+cd -P "$(dirname "$0")/.."
+. ./Scripts/release-common.sh
+check_build_paths ManagedRelease 'SSH-Wakey Managed.app'
+[ ! -L build/SSH-Wakey-Managed.dmg ] || fail 'Refusing linked disk image destination.'
+[ ! -d build/SSH-Wakey-Managed.dmg ] || fail 'Disk image destination is a directory.'
 
-cd "$(dirname "$0")/.."
-
-echo "Building ManagedRelease…"
-xcodebuild \
-    -project SSH-Wakey.xcodeproj \
-    -scheme "SSH-Wakey Managed" \
-    -configuration ManagedRelease \
-    -derivedDataPath build \
-    build >/dev/null
-
-BUILT="build/Build/Products/ManagedRelease/SSH-Wakey Managed.app"
-[ -d "$BUILT" ] || { echo "Build produced no app at $BUILT" >&2; exit 1; }
-
-STAGING="build/dmg-managed"
-rm -rf "$STAGING" "build/SSH-Wakey-Managed.dmg"
-mkdir -p "$STAGING"
-/usr/bin/ditto "$BUILT" "$STAGING/SSH-Wakey Managed.app"
-ln -s /Applications "$STAGING/Applications"
-
-hdiutil create \
-    -volname "SSH-Wakey Managed" \
-    -srcfolder "$STAGING" \
-    -ov -format UDZO \
-    "build/SSH-Wakey-Managed.dmg" >/dev/null
-
-rm -rf "$STAGING"
-echo
-echo "Wrote build/SSH-Wakey-Managed.dmg"
-echo "Drag the app onto Applications after opening it."
+echo 'Building ManagedRelease…'
+/usr/bin/xcodebuild -project SSH-Wakey.xcodeproj -scheme 'SSH-Wakey Managed' \
+    -configuration ManagedRelease -derivedDataPath build build >/dev/null
+BUILT='build/Build/Products/ManagedRelease/SSH-Wakey Managed.app'
+verify_release_bundle "$BUILT" com.CadenGithubB.sshwakey.managed 'SSH-Wakey Managed'
+WORK=$(/usr/bin/mktemp -d build/.SSH-Wakey-managed-dmg.XXXXXX)
+trap '/bin/rm -rf "$WORK"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+/bin/mkdir "$WORK/staging"
+/usr/bin/ditto "$BUILT" "$WORK/staging/SSH-Wakey Managed.app"
+verify_release_bundle "$WORK/staging/SSH-Wakey Managed.app" com.CadenGithubB.sshwakey.managed 'SSH-Wakey Managed'
+/bin/ln -s /Applications "$WORK/staging/Applications"
+/usr/bin/hdiutil create -volname 'SSH-Wakey Managed' -srcfolder "$WORK/staging" \
+    -format UDZO "$WORK/image.dmg" >/dev/null
+[ ! -L build/SSH-Wakey-Managed.dmg ] || fail 'Refusing linked disk image destination.'
+/bin/mv -f "$WORK/image.dmg" build/SSH-Wakey-Managed.dmg
+echo 'Wrote build/SSH-Wakey-Managed.dmg (ad-hoc signed, not notarized).'

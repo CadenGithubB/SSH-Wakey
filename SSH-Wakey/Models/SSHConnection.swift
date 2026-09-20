@@ -95,6 +95,9 @@ struct SSHConnection: Codable, Identifiable, Hashable, Sendable {
         copy.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.host = host.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.extraArguments = extraArguments.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Legacy files may contain the former automatic-trust toggle. Every
+        // normalized connection now requires an explicitly approved host key.
+        copy.strictHostKeyChecking = true
         return copy
     }
 
