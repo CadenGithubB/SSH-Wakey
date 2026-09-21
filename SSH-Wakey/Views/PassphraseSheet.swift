@@ -14,7 +14,7 @@ struct PassphraseSheet: View {
         /// Going back to a plain text file.
         case disable
         /// Writing a plain text copy somewhere else.
-        case export(URL)
+        case export
         /// Migrates the local wrapping key to require system authentication.
         case enableAppLock
         /// Removes system authentication while retaining vault encryption.
@@ -38,7 +38,7 @@ struct PassphraseSheet: View {
             case .change: return "Change"
             case .unlock: return "Unlock"
             case .disable: return "Turn Off"
-            case .export: return "Export"
+            case .export: return "Continue"
             case .enableAppLock, .disableAppLock: return "Continue"
             }
         }
@@ -54,6 +54,11 @@ struct PassphraseSheet: View {
         /// the same as any other password change.
         var wantsCurrent: Bool {
             if case .change = self { return true }
+            return false
+        }
+
+        var offersDestructiveClear: Bool {
+            if case .disable = self { return true }
             return false
         }
 
@@ -91,14 +96,12 @@ struct PassphraseSheet: View {
                 encrypted, but the app will open it without asking for Touch ID or your Mac \
                 login password. Automatic locking and its session disconnections will stop.
                 """
-            case .export(let url):
+            case .export:
                 return """
-                A readable copy of your connections will be written to \(url.lastPathComponent). \
-                It is an ordinary file with no encryption, so keep it somewhere safe and out of \
-                shared folders.
+                Enter your recovery passphrase, then confirm with Touch ID or your Mac login \
+                password. After both checks, you can choose where to save the copy.
 
-                Your passphrase confirms it is you, the same as the other two ways of ending up \
-                with a plain-text copy.
+                The exported file has no encryption. Keep it somewhere safe and out of shared folders.
                 """
             case .disable:
                 return """
@@ -124,9 +127,13 @@ struct PassphraseSheet: View {
     }
 
     let purpose: Purpose
+    /// Some callers need to expose the destructive reset even when the normal
+    /// passphrase-backed action cannot currently preserve the vault contents.
+    var submissionDisabled = false
     /// Throws to keep the sheet open and show what went wrong.
     var onSubmit: (Entry) throws -> Void
     var onCancel: () -> Void
+    var onClearEncryption: (() throws -> Void)? = nil
 
     // SwiftUI retains references to native fields, never their plaintext value.
     // Native AppKit storage and the scoped submission bridge cannot be promised
@@ -135,6 +142,7 @@ struct PassphraseSheet: View {
     @State private var copied = false
     @State private var problem: String?
     @State private var inputProtected = false
+    @State private var confirmsClearingEncryption = false
 
     private static func icon(for purpose: Purpose) -> String {
         switch purpose {
@@ -161,16 +169,26 @@ struct PassphraseSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if purpose.wantsCurrent {
+                if submissionDisabled {
+                    Label(
+                        "Turn off App Lock and unlock SSH-Wakey to turn off encryption "
+                            + "without erasing your connections.",
+                        systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if purpose.wantsCurrent {
                     NativeRecoveryField(field: fields.current, placeholder: "Current passphrase",
                                         focusInitially: true, onSubmit: submit)
                         .frame(height: 24)
                 }
 
-                NativeRecoveryField(field: fields.passphrase,
-                                    placeholder: purpose.wantsConfirmation ? "New passphrase" : "Recovery passphrase",
-                                    focusInitially: !purpose.wantsCurrent, onSubmit: submit)
-                    .frame(height: 24)
+                if !submissionDisabled {
+                    NativeRecoveryField(field: fields.passphrase,
+                                        placeholder: purpose.wantsConfirmation ? "New passphrase" : "Recovery passphrase",
+                                        focusInitially: !purpose.wantsCurrent, onSubmit: submit)
+                        .frame(height: 24)
+                }
 
                 if purpose.wantsConfirmation {
                     NativeRecoveryField(field: fields.confirmation, placeholder: "Repeat it",
@@ -217,6 +235,11 @@ struct PassphraseSheet: View {
             Divider()
 
             HStack {
+                if onClearEncryption != nil {
+                    Button("Clear Encryption", role: .destructive) {
+                        confirmsClearingEncryption = true
+                    }
+                }
                 Spacer()
                 Button("Cancel") {
                     fields.invalidate()
@@ -226,7 +249,7 @@ struct PassphraseSheet: View {
 
                 Button(purpose.actionTitle, action: submit)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!inputProtected)
+                    .disabled(submissionDisabled || !inputProtected)
             }
             .padding(16)
         }
@@ -248,10 +271,28 @@ struct PassphraseSheet: View {
         .onDisappear {
             fields.invalidate()
         }
+        .alert(
+            "Clear encryption and erase all saved connections?",
+            isPresented: $confirmsClearingEncryption
+        ) {
+            Button("Clear and Erase", role: .destructive) {
+                do {
+                    try onClearEncryption?()
+                    fields.invalidate()
+                } catch {
+                    problem = error.localizedDescription
+                }
+            }
+            Button("Cancel", role: .cancel) { confirmsClearingEncryption = false }
+        } message: {
+            Text("This permanently erases every saved connection and its history from this Mac, "
+                 + "removes the local encryption key, and turns off App Lock. Open SSH sessions "
+                 + "will be disconnected. This cannot be undone.")
+        }
     }
 
     private func activateInput() {
-        guard !fields.isInvalidated, NSApplication.shared.isActive else {
+        guard !submissionDisabled, !fields.isInvalidated, NSApplication.shared.isActive else {
             fields.setEnabled(false)
             inputProtected = false
             return
@@ -300,7 +341,8 @@ struct PassphraseSheet: View {
     }
 
     private func submit() {
-        guard !fields.isInvalidated, inputProtected, fields.secureInput.isActive else { return }
+        guard !submissionDisabled, !fields.isInvalidated,
+              inputProtected, fields.secureInput.isActive else { return }
         do {
             try autoreleasepool {
                 fields.validateEditing()

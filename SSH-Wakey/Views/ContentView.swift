@@ -14,6 +14,9 @@ struct ContentView: View {
     @State private var removalTargets: RemovalRequest?
     @State private var showsColumnPicker = false
     @State private var accessGeneration = UUID()
+    @State private var detailAuthorizationTask: Task<Void, Never>?
+    @State private var detailAuthorizationID: UUID?
+    @State private var detailAuthorizationProblem: String?
 
     /// The one row whose details are on show. Everything else is masked, and
     /// revealing a row hides whichever was revealed before, so at most one
@@ -54,6 +57,13 @@ struct ContentView: View {
             switch self {
             case .unlock, .help: return false
             default: return true
+            }
+        }
+
+        var revealsSavedDetails: Bool {
+            switch self {
+            case .edit, .activity: return true
+            default: return false
             }
         }
     }
@@ -103,6 +113,29 @@ struct ContentView: View {
             controls
         }
         .frame(minWidth: Column.minimumWindowWidth, minHeight: 480)
+        .background {
+            WindowCornerStyle(cornerRadius: 9)
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    sheet = .help
+                } label: {
+                    Label("Help", systemImage: "questionmark.circle")
+                }
+                .help("What SSH-Wakey does")
+
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .help("Settings")
+
+                if store.isAppLockEnabled && !store.isLocked {
+                    Button("Lock", systemImage: "lock.fill", action: security.lockNow)
+                        .help("Lock SSH-Wakey and disconnect SSH sessions")
+                }
+            }
+        }
         .disabled(store.isAuthenticating && !store.isLocked)
         .onAppear {
             (NSApp.delegate as? AppDelegate)?.sessions = sessions
@@ -120,6 +153,12 @@ struct ContentView: View {
             store.reloadManagedPolicy()
             sessions.forcesUnlock = store.isManagedBuild
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            handleApplicationDeactivation()
+        }
+        .onChange(of: security.detailReveal.isAuthorized) { _, authorized in
+            if !authorized { hideAuthorizedDetails() }
+        }
         .onChange(of: columns) { _, layout in saveColumnLayout(layout) }
         .onReceive(NotificationCenter.default.publisher(for: .showWakeyHelp)) { _ in
             sheet = .help
@@ -129,7 +168,7 @@ struct ContentView: View {
             sheet = nil
             selection = []
             removalTargets = nil
-            revealedRow = nil
+            revokeDetailPresentation()
             showsColumnPicker = false
         }
         .sheet(item: $sheet, content: sheetContent)
@@ -153,6 +192,16 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { removalTargets = nil }
         } message: { request in
             Text(removalAlertMessage(for: request.ids.compactMap { store.connection(with: $0) }))
+        }
+        .alert(
+            "Couldn’t show encrypted details",
+            isPresented: Binding(
+                get: { detailAuthorizationProblem != nil },
+                set: { if !$0 { detailAuthorizationProblem = nil } })
+        ) {
+            Button("OK") { detailAuthorizationProblem = nil }
+        } message: {
+            Text(detailAuthorizationProblem ?? "Authentication was not completed.")
         }
     }
 
@@ -389,20 +438,20 @@ struct ContentView: View {
                     Button("Edit…") {
                         guard authorizeAction(generation: generation),
                               store.connection(with: id) != nil else { return }
-                        sheet = .edit(id)
+                        requestDetailSheet(.edit(id), generation: generation)
                     }
                         .disabled(sessions.state(for: id).isConnected
                                   || sessions.state(for: id).isConnecting)
                 }
                 Button(isRevealed(id) ? "Hide Details" : "Show Details") {
                     guard authorizeAction(generation: generation) else { return }
-                    toggleReveal(id)
+                    requestToggleReveal(id, generation: generation)
                 }
                 if store.allowsDiagnostics {
                     Button("Activity…") {
                         guard authorizeAction(generation: generation),
                               store.connection(with: id) != nil else { return }
-                        sheet = .activity(id)
+                        requestDetailSheet(.activity(id), generation: generation)
                     }
                 }
                 if !store.isManagedBuild {
@@ -439,10 +488,18 @@ struct ContentView: View {
         return revealedRow == id
     }
 
-    /// Reveals one row and hides whatever was revealed before.
-    private func toggleReveal(_ id: SSHConnection.ID) {
-        guard authorizeAction(), store.connection(with: id) != nil else { return }
-        revealedRow = revealedRow == id ? nil : id
+    /// Reveals one row and hides whatever was revealed before. Encrypted
+    /// details first acquire the short macOS-authenticated display lease.
+    private func requestToggleReveal(_ id: SSHConnection.ID, generation: UUID) {
+        guard authorizeAction(generation: generation), store.connection(with: id) != nil else { return }
+        if revealedRow == id {
+            revealedRow = nil
+            return
+        }
+        requestDetailAuthorization(generation: generation) {
+            guard store.connection(with: id) != nil else { return }
+            revealedRow = id
+        }
     }
 
     /// Per-row reveal, beside the status dot.
@@ -457,7 +514,7 @@ struct ContentView: View {
             guard authorizeAction(generation: generation),
                   store.connection(with: connection.id) != nil else { return }
             selection = [connection.id]
-            toggleReveal(connection.id)
+            requestToggleReveal(connection.id, generation: generation)
         }
         .frame(width: 20, height: 20)
         .help(shown
@@ -556,7 +613,7 @@ struct ContentView: View {
                 if let connection = selectedConnection {
                     Button("Edit") {
                         guard authorizeAction(), store.connection(with: connection.id) != nil else { return }
-                        sheet = .edit(connection.id)
+                        requestDetailSheet(.edit(connection.id), generation: accessGeneration)
                     }
                         .disabled(store.isLocked || store.isUnavailable || selectedState.isConnected
                                   || selectedState.isConnecting)
@@ -568,25 +625,6 @@ struct ContentView: View {
                     }
                     .disabled(store.isLocked || store.isUnavailable || selectionIsBusy)
                 }
-            }
-
-            Button {
-                sheet = .help
-            } label: {
-                Image(systemName: "questionmark.circle")
-            }
-            .buttonStyle(.borderless)
-            .help("What SSH-Wakey does")
-
-            SettingsLink {
-                Image(systemName: "gearshape")
-            }
-            .buttonStyle(.borderless)
-            .help("Settings")
-
-            if store.isAppLockEnabled && !store.isLocked {
-                Button("Lock", systemImage: "lock.fill", action: security.lockNow)
-                    .help("Lock SSH-Wakey and disconnect SSH sessions")
             }
 
             Spacer()
@@ -650,7 +688,10 @@ struct ContentView: View {
     private func sheetContent(_ kind: SheetKind) -> some View {
         // A previously tracked menu or presentation callback must not recreate
         // a sheet holding destination details after the app has locked.
-        if !kind.requiresOpenAccess || (store.access == .open && !store.isAuthenticating) {
+        let hasAccess = !kind.requiresOpenAccess || (store.access == .open && !store.isAuthenticating)
+        let mayReveal = !kind.revealsSavedDetails || !store.isEncrypted
+            || security.detailReveal.isAuthorized
+        if hasAccess && mayReveal {
             authorizedSheetContent(kind)
         }
     }
@@ -677,7 +718,7 @@ struct ContentView: View {
                     connection: existing,
                     title: "Edit Connection",
                     onSave: { connection in
-                        guard authorizeAction(generation: generation),
+                        guard authorizeSavedDetailAction(generation: generation),
                               store.connection(with: id) != nil else { return }
                         store.update(connection)
                         sheet = nil
@@ -770,10 +811,127 @@ struct ContentView: View {
         return security.authorizeCurrentAccess()
     }
 
+    private func authorizeSavedDetailAction(generation: UUID) -> Bool {
+        guard authorizeAction(generation: generation) else { return false }
+        return !store.isEncrypted || security.detailReveal.checkDeadline()
+    }
+
+    private func requestDetailSheet(_ requested: SheetKind, generation: UUID) {
+        requestDetailAuthorization(generation: generation) { sheet = requested }
+    }
+
+    private func requestDetailAuthorization(
+        generation: UUID,
+        action: @escaping @MainActor () -> Void
+    ) {
+        guard authorizeAction(generation: generation), detailAuthorizationTask == nil else { return }
+        let id = UUID()
+        detailAuthorizationID = id
+        detailAuthorizationProblem = nil
+        detailAuthorizationTask = Task { @MainActor in
+            defer {
+                if detailAuthorizationID == id {
+                    detailAuthorizationTask = nil
+                    detailAuthorizationID = nil
+                }
+            }
+            let authorized = await security.authorizeDetailReveal()
+            guard !Task.isCancelled, detailAuthorizationID == id,
+                  generation == accessGeneration else { return }
+            if authorized {
+                await waitUntilApplicationIsActive()
+                guard !Task.isCancelled, detailAuthorizationID == id,
+                      authorizeSavedDetailAction(generation: generation) else {
+                    security.revokeDetailReveal()
+                    return
+                }
+                action()
+            } else if let problem = security.detailReveal.problem {
+                detailAuthorizationProblem = problem
+                security.detailReveal.clearProblem()
+            }
+        }
+    }
+
+    private func waitUntilApplicationIsActive() async {
+        guard !NSApp.isActive else { return }
+        for await _ in NotificationCenter.default.notifications(
+            named: NSApplication.didBecomeActiveNotification)
+        {
+            return
+        }
+    }
+
+    private func hideAuthorizedDetails() {
+        revealedRow = nil
+        if sheet?.revealsSavedDetails == true { sheet = nil }
+    }
+
+    private func handleApplicationDeactivation() {
+        detailAuthorizationProblem = nil
+        hideAuthorizedDetails()
+        guard security.detailReveal.revokeForApplicationDeactivation() else { return }
+        detailAuthorizationTask?.cancel()
+        detailAuthorizationTask = nil
+        detailAuthorizationID = nil
+    }
+
+    private func revokeDetailPresentation() {
+        detailAuthorizationTask?.cancel()
+        detailAuthorizationTask = nil
+        detailAuthorizationID = nil
+        detailAuthorizationProblem = nil
+        security.revokeDetailReveal()
+        hideAuthorizedDetails()
+    }
+
     private func requestRemoval(_ ids: Set<SSHConnection.ID>, generation: UUID) {
         guard authorizeAction(generation: generation), !ids.isEmpty,
               ids.allSatisfy({ store.connection(with: $0) != nil }) else { return }
         removalTargets = RemovalRequest(ids: ids, generation: generation)
+    }
+}
+
+/// AppKit owns the outer frame rather than SwiftUI's content view. Keeping the
+/// adjustment here makes the main window a touch squarer without replacing its
+/// standard title bar, resize behavior, or shadow.
+private struct WindowCornerStyle: NSViewRepresentable {
+    let cornerRadius: CGFloat
+
+    func makeNSView(context: Context) -> WindowCornerStyleView {
+        WindowCornerStyleView(cornerRadius: cornerRadius)
+    }
+
+    func updateNSView(_ view: WindowCornerStyleView, context: Context) {
+        view.cornerRadius = cornerRadius
+        view.apply()
+    }
+}
+
+private final class WindowCornerStyleView: NSView {
+    var cornerRadius: CGFloat
+
+    init(cornerRadius: CGFloat) {
+        self.cornerRadius = cornerRadius
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        apply()
+    }
+
+    func apply() {
+        guard let window, let frameView = window.contentView?.superview else { return }
+        frameView.wantsLayer = true
+        frameView.layer?.cornerRadius = cornerRadius
+        frameView.layer?.masksToBounds = true
+        window.invalidateShadow()
     }
 }
 

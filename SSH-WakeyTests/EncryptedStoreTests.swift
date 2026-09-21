@@ -3,6 +3,42 @@ import Darwin
 import XCTest
 @testable import SSH_Wakey
 
+/// Synthetic owner authentication; no test prompts or reads the user's account.
+@MainActor
+private final class TestExportAuthenticator: OwnerAuthenticating {
+    var callCount = 0
+    var cancelCount = 0
+    var error: Error?
+    var pause = false
+    private var pending: CheckedContinuation<Void, Never>?
+    private var started: CheckedContinuation<Void, Never>?
+
+    func authenticate(reason: String) async throws {
+        callCount += 1
+        if pause {
+            pause = false
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                started?.resume()
+                started = nil
+            }
+        }
+        if let error { throw error }
+    }
+
+    func cancel() { cancelCount += 1 }
+
+    func waitUntilPaused() async {
+        if pending != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+
+    func resume() {
+        pending?.resume()
+        pending = nil
+    }
+}
+
 /// The whole encryption lifecycle through the store: turning it on, reopening
 /// it, losing the Keychain key, recovering, and turning it off again.
 @MainActor
@@ -12,6 +48,8 @@ final class EncryptedStoreTests: XCTestCase {
     private var account: String!
     private var store: ConnectionStore!
     private let appLockKeys = TestAppLockKeys()
+    private var exportAuthenticator: TestExportAuthenticator!
+    private var exportInstant: TimeInterval = 1000
 
     private let passphrase = "a-long-enough-passphrase"
 
@@ -19,6 +57,8 @@ final class EncryptedStoreTests: XCTestCase {
         directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("SSH-WakeyVault-\(UUID().uuidString)", isDirectory: true)
         account = "test-\(UUID().uuidString)"
+        exportAuthenticator = TestExportAuthenticator()
+        exportInstant = 1000
         store = makeStore()
         store.add(SSHConnection(name: "Studio Mac", username: "admin", host: "192.168.1.24"))
     }
@@ -30,7 +70,9 @@ final class EncryptedStoreTests: XCTestCase {
 
     private func makeStore() -> ConnectionStore {
         ConnectionStore(
-            fileStore: ConnectionFileStore(directoryURL: directory), keychainAccount: account, isManagedBuild: false, appLockKeys: appLockKeys)
+            fileStore: ConnectionFileStore(directoryURL: directory), keychainAccount: account,
+            isManagedBuild: false, appLockKeys: appLockKeys, exportAuthenticator: exportAuthenticator,
+            exportClock: { [unowned self] in self.exportInstant })
     }
 
     private var fileText: String {
@@ -222,13 +264,62 @@ final class EncryptedStoreTests: XCTestCase {
         XCTAssertNotNil(try KeychainKeyStore.load(account: account), "the key must still be there")
     }
 
+    func testClearingEncryptionErasesConnectionsAndRemovesTheKey() throws {
+        try store.enableEncryption(passphrase: passphrase)
+
+        try store.clearEncryptionAndConnections()
+
+        XCTAssertFalse(store.isEncrypted)
+        XCTAssertFalse(store.isLocked)
+        XCTAssertTrue(store.connections.isEmpty)
+        XCTAssertNil(try KeychainKeyStore.load(account: account))
+        XCTAssertEqual(try ConnectionFileStore(directoryURL: directory).load(), [])
+        XCTAssertTrue(makeStore().connections.isEmpty)
+    }
+
+    func testClearingEncryptionWorksWhenRecoveryIsUnavailable() throws {
+        try store.enableEncryption(passphrase: passphrase)
+        try KeychainKeyStore.delete(account: account)
+        let locked = makeStore()
+        XCTAssertTrue(locked.isLocked)
+
+        try locked.clearEncryptionAndConnections()
+
+        XCTAssertFalse(locked.isEncrypted)
+        XCTAssertFalse(locked.isLocked)
+        XCTAssertTrue(locked.connections.isEmpty)
+        XCTAssertEqual(try ConnectionFileStore(directoryURL: directory).load(), [])
+    }
+
+    func testStaleStoreCannotClearAChangedVaultOrItsKey() throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let stale = makeStore()
+        store.add(SSHConnection(name: "New", username: "test", host: "new.invalid"))
+        let changed = try Data(contentsOf: connectionsFile)
+        let key = try KeychainKeyStore.load(account: account)
+
+        XCTAssertThrowsError(try stale.clearEncryptionAndConnections())
+
+        XCTAssertEqual(try Data(contentsOf: connectionsFile), changed)
+        XCTAssertEqual(try KeychainKeyStore.load(account: account), key)
+        XCTAssertTrue(stale.isEncrypted)
+        XCTAssertEqual(makeStore().connections.count, 2)
+    }
+
     // MARK: - Export
 
-    func testExportWritesAReadableCopyOnlyYouCanRead() throws {
+    private func authorizeAndExport(to destination: URL, passphrase: String? = nil) async throws {
+        let prepared = try store.prepareExport(passphrase: passphrase)
+        try await store.authorizeExport(prepared, validateAccess: { true })
+        try store.export(prepared, to: destination, validateAccess: { true })
+    }
+
+    func testExportWritesAReadableCopyOnlyYouCanRead() async throws {
         try store.enableEncryption(passphrase: passphrase)
 
         let destination = directory.appendingPathComponent("export.json")
-        try store.export(to: destination, passphrase: passphrase)
+        try await authorizeAndExport(to: destination, passphrase: passphrase)
+        XCTAssertEqual(exportAuthenticator.callCount, 1)
 
         let exported = try String(contentsOf: destination, encoding: .utf8)
         XCTAssertTrue(exported.contains("192.168.1.24"))
@@ -246,24 +337,26 @@ final class EncryptedStoreTests: XCTestCase {
         XCTAssertEqual(try restored.load().first?.host, "192.168.1.24")
     }
 
-    func testExportNeedsThePassphraseOnceEncrypted() throws {
+    func testExportNeedsThePassphraseOnceEncrypted() async throws {
         try store.enableEncryption(passphrase: passphrase)
         let destination = directory.appendingPathComponent("export.json")
 
-        XCTAssertThrowsError(try store.export(to: destination)) {
+        XCTAssertThrowsError(try store.prepareExport()) {
             XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
         }
-        XCTAssertThrowsError(try store.export(to: destination, passphrase: "wrong-passphrase-here"))
+        XCTAssertThrowsError(try store.prepareExport(passphrase: "wrong-passphrase-here"))
+        XCTAssertEqual(exportAuthenticator.callCount, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path),
                        "a refused export must not leave a file behind")
 
-        XCTAssertNoThrow(try store.export(to: destination, passphrase: passphrase))
+        try await authorizeAndExport(to: destination, passphrase: passphrase)
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
     }
 
-    func testExportNeedsNoPassphraseWhenNothingIsEncrypted() throws {
+    func testExportNeedsNoPassphraseWhenNothingIsEncrypted() async throws {
         let destination = directory.appendingPathComponent("plain-export.json")
-        try store.export(to: destination)
+        try await authorizeAndExport(to: destination)
+        XCTAssertEqual(exportAuthenticator.callCount, 1)
 
         XCTAssertTrue(try String(contentsOf: destination, encoding: .utf8).contains("192.168.1.24"))
     }
@@ -273,7 +366,248 @@ final class EncryptedStoreTests: XCTestCase {
         try KeychainKeyStore.delete(account: account)
 
         let locked = makeStore()
-        XCTAssertThrowsError(try locked.export(to: directory.appendingPathComponent("x.json")))
+        XCTAssertThrowsError(try locked.prepareExport())
+    }
+
+    func testExportCannotWriteWithoutFreshOwnerAuthentication() throws {
+        let prepared = try store.prepareExport()
+        let destination = directory.appendingPathComponent("unauthorized.json")
+        XCTAssertThrowsError(try store.export(prepared, to: destination, validateAccess: { true }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(store.isAuthenticating)
+    }
+
+    func testExportDialogOnlyAppearsAfterBothChecksAndEachExportAuthenticates() async throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        for number in 1...2 {
+            let destination = directory.appendingPathComponent("copy-\(number).json")
+            let prepared = try store.prepareExport(passphrase: passphrase)
+            XCTAssertEqual(exportAuthenticator.callCount, number - 1)
+            let written = try await security.export(prepared) {
+                XCTAssertEqual(self.exportAuthenticator.callCount, number)
+                XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+                return destination
+            }
+            XCTAssertEqual(written, destination)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+            XCTAssertFalse(store.isAuthenticating)
+        }
+    }
+
+    func testExportFailureOrAuthenticationCancellationNeverOpensSaveDialog() async throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        let destination = directory.appendingPathComponent("existing.json")
+        let original = Data("keep this existing file".utf8)
+        try ProtectedFile.write(original, to: destination)
+        for error in [DetailRevealError.authenticationFailed, .unavailable] as [Error]
+            + [CancellationError()] {
+            exportAuthenticator.error = error
+            let prepared = try store.prepareExport(passphrase: passphrase)
+            do {
+                _ = try await security.export(prepared) {
+                    XCTFail("save dialog opened without macOS authorization")
+                    return destination
+                }
+                XCTFail("authentication failure was accepted")
+            } catch { }
+            XCTAssertEqual(try Data(contentsOf: destination), original)
+            XCTAssertFalse(store.isAuthenticating)
+        }
+    }
+
+    func testExportSaveCancellationConsumesAuthorization() async throws {
+        let prepared = try store.prepareExport()
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        let result = try await security.export(prepared) { nil }
+        XCTAssertNil(result)
+        XCTAssertFalse(store.isAuthenticating)
+        let destination = directory.appendingPathComponent("cancelled.json")
+        XCTAssertThrowsError(try store.export(prepared, to: destination, validateAccess: { true }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    func testExportAuthorizationCannotBeReplayedOrUsedByAnotherStore() async throws {
+        let other = makeStore()
+        let prepared = try store.prepareExport()
+        try await store.authorizeExport(prepared, validateAccess: { true })
+        let destination = directory.appendingPathComponent("first.json")
+        XCTAssertThrowsError(try other.export(prepared, to: destination, validateAccess: { true }))
+        try store.export(prepared, to: destination, validateAccess: { true })
+        let second = directory.appendingPathComponent("replayed.json")
+        XCTAssertThrowsError(try store.export(prepared, to: second, validateAccess: { true }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+        XCTAssertEqual(exportAuthenticator.callCount, 1)
+    }
+
+    func testExportExpiryRejectsWritingAfterSaveDialog() async throws {
+        let prepared = try store.prepareExport()
+        try await store.authorizeExport(prepared, validateAccess: { true })
+        exportInstant += 60
+        let destination = directory.appendingPathComponent("expired.json")
+        XCTAssertThrowsError(try store.export(prepared, to: destination, validateAccess: { true }))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(store.isAuthenticating)
+    }
+
+    func testExportExpiryDuringAuthenticationNeverOpensSaveDialog() async throws {
+        exportAuthenticator.pause = true
+        let prepared = try store.prepareExport()
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        let task = Task {
+            try await security.export(prepared) {
+                XCTFail("expired authentication opened the save dialog")
+                return nil
+            }
+        }
+        await exportAuthenticator.waitUntilPaused()
+        exportInstant += 60
+        exportAuthenticator.resume()
+        do { _ = try await task.value; XCTFail("expired authentication accepted") }
+        catch { }
+        XCTAssertFalse(store.isAuthenticating)
+    }
+
+    func testExportLockDuringAuthenticationRejectsLateSuccess() async throws {
+        try await enableAppLock()
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        security.refresh()
+        exportAuthenticator.pause = true
+        let prepared = try store.prepareExport(passphrase: passphrase)
+        let task = Task {
+            try await security.export(prepared) {
+                XCTFail("a late authentication callback opened the save dialog after lock")
+                return nil
+            }
+        }
+        await exportAuthenticator.waitUntilPaused()
+        security.lockNow()
+        exportAuthenticator.resume()
+        do { _ = try await task.value; XCTFail("late success accepted") }
+        catch { }
+        XCTAssertTrue(store.isLocked)
+        XCTAssertFalse(store.isAuthenticating)
+        XCTAssertGreaterThan(exportAuthenticator.cancelCount, 0)
+    }
+
+    func testExportTaskCancellationRejectsLateSuccess() async throws {
+        exportAuthenticator.pause = true
+        let prepared = try store.prepareExport()
+        let task = Task { try await self.store.authorizeExport(prepared, validateAccess: { true }) }
+        await exportAuthenticator.waitUntilPaused()
+        task.cancel()
+        exportAuthenticator.resume()
+        do { try await task.value; XCTFail("cancelled authentication accepted") }
+        catch { }
+        XCTAssertFalse(store.isAuthenticating)
+    }
+
+    func testExportSleepDuringSaveDialogRevokesPlaintextAuthorization() async throws {
+        let prepared = try store.prepareExport()
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        let destination = directory.appendingPathComponent("slept.json")
+        do {
+            _ = try await security.export(prepared) {
+                security.inactivity.lockNow(reason: .sleep)
+                return destination
+            }
+            XCTFail("export survived sleep")
+        } catch { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(store.isAuthenticating)
+    }
+
+    func testExportChangedVaultDuringSaveDialogIsRefused() async throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let other = makeStore()
+        let prepared = try store.prepareExport(passphrase: passphrase)
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        let destination = directory.appendingPathComponent("stale.json")
+        do {
+            _ = try await security.export(prepared) {
+                other.add(SSHConnection(name: "Synthetic changed row", username: "test", host: "example.invalid"))
+                return destination
+            }
+            XCTFail("a changed vault was exported")
+        } catch { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(store.isAuthenticating)
+    }
+
+    func testExportCannotOverwriteActiveEncryptedStore() async throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let original = try Data(contentsOf: connectionsFile)
+        let prepared = try store.prepareExport(passphrase: passphrase)
+        try await store.authorizeExport(prepared, validateAccess: { true })
+        XCTAssertThrowsError(try store.export(prepared, to: connectionsFile, validateAccess: { true }))
+        XCTAssertEqual(try Data(contentsOf: connectionsFile), original)
+        XCTAssertTrue(store.isEncrypted)
+    }
+
+    func testExportLateCancelledAttemptCannotCancelNewAttempt() async throws {
+        let first = try store.prepareExport()
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager())
+        exportAuthenticator.pause = true
+        let task = Task { try await security.export(first) { nil } }
+        await exportAuthenticator.waitUntilPaused()
+        store.cancelExport()
+        let second = try store.prepareExport()
+        exportAuthenticator.resume()
+        do { _ = try await task.value; XCTFail("cancelled attempt accepted") }
+        catch { }
+        XCTAssertTrue(store.isAuthenticating, "old cleanup must not cancel a newer export")
+        try await store.authorizeExport(second, validateAccess: { true })
+        try store.export(second, to: directory.appendingPathComponent("new.json"), validateAccess: { true })
+    }
+
+    func testExportPendingAuthorizationBlocksConnectionMutations() throws {
+        let prepared = try store.prepareExport()
+        let row = try XCTUnwrap(store.connections.first)
+        store.add(SSHConnection(name: "Unexpected", username: "test", host: "example.invalid"))
+        store.remove(id: row.id)
+        XCTAssertThrowsError(try store.prepareExport())
+        XCTAssertEqual(store.connections, [row])
+        store.cancelExport(prepared)
+        XCTAssertFalse(store.isAuthenticating)
+    }
+
+    func testExportDoesNotReuseAnExistingDetailRevealLease() async throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let details = DetailRevealController(authenticator: exportAuthenticator)
+        let revealed = await details.authorize()
+        XCTAssertTrue(revealed)
+        XCTAssertEqual(exportAuthenticator.callCount, 1)
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager(), detailReveal: details)
+        let prepared = try store.prepareExport(passphrase: passphrase)
+        _ = try await security.export(prepared) { nil }
+        XCTAssertEqual(exportAuthenticator.callCount, 2, "export must prompt even with a valid display lease")
+    }
+
+    func testExportDoesNotMarkSSHSessionsLocked() throws {
+        let sessions = SSHSessionManager()
+        let security = AppSecurityCoordinator(store: store, sessions: sessions)
+        security.refresh()
+        let prepared = try store.prepareExport()
+        security.refresh()
+        XCTAssertFalse(sessions.isAppLocked)
+        store.cancelExport(prepared)
+        security.refresh()
+        XCTAssertFalse(sessions.isAppLocked)
+    }
+
+    func testExportRefusesCaseVariantOfActiveStore() async throws {
+        let alias = connectionsFile.deletingLastPathComponent()
+            .appendingPathComponent(connectionsFile.lastPathComponent.uppercased())
+        guard FileManager.default.fileExists(atPath: alias.path) else {
+            throw XCTSkip("This test requires a case-insensitive volume.")
+        }
+        try store.enableEncryption(passphrase: passphrase)
+        let original = try Data(contentsOf: connectionsFile)
+        let prepared = try store.prepareExport(passphrase: passphrase)
+        try await store.authorizeExport(prepared, validateAccess: { true })
+        XCTAssertThrowsError(try store.export(prepared, to: alias, validateAccess: { true }))
+        XCTAssertEqual(try Data(contentsOf: connectionsFile), original)
     }
 
     // MARK: - A file that cannot be read
@@ -366,7 +700,7 @@ final class EncryptedStoreTests: XCTestCase {
         let reopened = try reopenAfterPlanting(Data("this is not json".utf8))
         let destination = directory.appendingPathComponent("should-not-exist.json")
 
-        XCTAssertThrowsError(try reopened.export(to: destination))
+        XCTAssertThrowsError(try reopened.prepareExport())
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
     }
 
@@ -483,6 +817,21 @@ final class EncryptedStoreTests: XCTestCase {
         try await store.enableAppLock(prepared)
     }
 
+    func testClearingALockedAppLockVaultTurnsAppLockOff() async throws {
+        try await enableAppLock()
+        store.lock()
+        XCTAssertTrue(store.isLocked)
+        XCTAssertTrue(store.isAppLockEnabled)
+
+        try store.clearEncryptionAndConnections()
+
+        XCTAssertFalse(store.isEncrypted)
+        XCTAssertFalse(store.isLocked)
+        XCTAssertFalse(store.isAppLockEnabled)
+        XCTAssertTrue(store.connections.isEmpty)
+        XCTAssertEqual(try ConnectionFileStore(directoryURL: directory).load(), [])
+    }
+
     func testAppLockRotatesKeyAndRequiresFreshAuthenticationAfterEveryLock() async throws {
         try store.enableEncryption(passphrase: passphrase)
         let oldVault = try storedVault()
@@ -575,7 +924,7 @@ final class EncryptedStoreTests: XCTestCase {
         store.update(changed)
         store.rememberLinkAddress("aa:bb:cc:dd:ee:ff", for: row.id)
         try store.disableEncryption(passphrase: passphrase)
-        XCTAssertThrowsError(try store.export(to: directory.appendingPathComponent("export.json"), passphrase: passphrase))
+        XCTAssertThrowsError(try store.prepareExport(passphrase: passphrase))
         XCTAssertEqual(store.connections, [row])
         XCTAssertEqual(try Data(contentsOf: connectionsFile), original)
         try await store.enableAppLock(prepared)
@@ -644,7 +993,7 @@ final class EncryptedStoreTests: XCTestCase {
         let victim = makeStore()
         XCTAssertFalse(victim.isLocked, "the genuine Keychain wrapper still opens the real payload")
         XCTAssertEqual(victim.connections.count, 1)
-        XCTAssertThrowsError(try victim.export(to: directory.appendingPathComponent("forged-export.json"), passphrase: chosen))
+        XCTAssertThrowsError(try victim.prepareExport(passphrase: chosen))
         XCTAssertThrowsError(try victim.disableEncryption(passphrase: chosen))
         XCTAssertThrowsError(try victim.changePassphrase(from: chosen, to: passphrase))
         XCTAssertThrowsError(try victim.prepareEnableAppLock(passphrase: chosen))

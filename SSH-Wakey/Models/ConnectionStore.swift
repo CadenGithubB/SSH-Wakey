@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Observation
 
@@ -43,7 +44,11 @@ final class ConnectionStore {
     private var authenticationGeneration: UInt64 = 0
     private let storeIdentity = UUID()
     private var pendingPreparation: AppLockPreparation?
+    private var pendingExport: ExportPreparation?
+    private let exportAuthenticator: any OwnerAuthenticating
+    private let exportClock: () -> TimeInterval
     private(set) var isAuthenticating = false
+    var isExporting: Bool { pendingExport != nil }
     var isAppLockEnabled: Bool { vault?.keyProtection.isAppLockEnabled == true }
     var canUnlockWithSystemAuthentication: Bool { isAppLockEnabled && isLocked }
 
@@ -67,8 +72,12 @@ final class ConnectionStore {
         isManagedBuild: Bool = AppDistribution.isManagedBuild,
         preferences: any ManagedPreferenceReading = SystemManagedPreferences(),
         linkCache: LinkAddressCache? = nil,
-        appLockKeys: any AppLockKeyProviding = SecureEnclaveAppLockKeys()
+        appLockKeys: any AppLockKeyProviding = SecureEnclaveAppLockKeys(),
+        exportAuthenticator: (any OwnerAuthenticating)? = nil,
+        exportClock: @escaping () -> TimeInterval = AppLockController.continuousUptime
     ) {
+        self.exportAuthenticator = exportAuthenticator ?? SystemOwnerAuthenticator()
+        self.exportClock = exportClock
         self.appLockKeys = appLockKeys
         self.fileStore = fileStore
         self.keychainAccount = keychainAccount
@@ -347,6 +356,28 @@ final class ConnectionStore {
         storageError = nil
     }
 
+    /// Discards an encrypted vault when it cannot or should not be recovered.
+    ///
+    /// Unlike `disableEncryption`, this deliberately needs no passphrase: it
+    /// never reveals or preserves the protected rows. The revision check keeps
+    /// a stale app instance from erasing a vault that another instance changed.
+    func clearEncryptionAndConnections() throws {
+        guard !isManagedBuild, !isAuthenticating, isEncrypted,
+              access == .open || access == .locked else { return }
+
+        loadedRevision = try fileStore.commit(
+            expectedRevision: loadedRevision,
+            afterWrite: { try? KeychainKeyStore.delete(account: self.keychainAccount) }
+        ) { ConnectionFileStore.Document(connections: []) }
+
+        connections = []
+        vault = nil
+        dataKey = nil
+        isEncrypted = false
+        access = .open
+        storageError = nil
+    }
+
     /// Opens with recovery. Legacy vaults repair their login-Keychain wrapper;
     /// protected vaults retain App Lock and open only this in-memory session.
     func unlock(withPassphrase passphrase: String) throws {
@@ -431,6 +462,8 @@ final class ConnectionStore {
 
     private func cancelAuthentication() {
         authenticationGeneration &+= 1
+        if pendingExport != nil { exportAuthenticator.cancel() }
+        pendingExport = nil
         authentication?.invalidate()
         authentication = nil
         pendingPreparation?.clear()
@@ -573,14 +606,43 @@ final class ConnectionStore {
         storageError = recoveryWarning
     }
 
-    /// Writes a readable copy, in the same format as an unencrypted file, so it
-    /// can be read by eye or put straight back.
-    ///
-    /// Asks for the passphrase when the file is encrypted, so that producing a
-    /// permanent plain-text copy needs the same proof as the other two ways of
-    /// ending up with one. The passphrase is verified immediately before the
-    /// write, so it is held for as short a time as possible.
-    func export(to url: URL, passphrase: String? = nil) throws {
+    /// A single-use proof of recovery verification for one vault revision.
+    /// Contains no passphrase, key, or serialized connections.
+    /// Only this store can create it; a lock/reload/cancel makes it unusable.
+    @MainActor
+    final class ExportPreparation {
+        fileprivate let generation: UInt64
+        fileprivate let revision: ProtectedFile.Revision
+        fileprivate let createdAt: TimeInterval
+        fileprivate var started = false
+        fileprivate var ownerAuthenticated = false
+
+        fileprivate init(generation: UInt64,
+                         revision: ProtectedFile.Revision, createdAt: TimeInterval) {
+            self.generation = generation
+            self.revision = revision
+            self.createdAt = createdAt
+        }
+    }
+
+    enum ExportError: LocalizedError {
+        case invalidAuthorization, expired, activeStoreDestination
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidAuthorization:
+                return "The export was cancelled or the saved connections changed. Start the export again."
+            case .expired:
+                return "Export authorization expired. Start the export again."
+            case .activeStoreDestination:
+                return "Choose a different destination. An export cannot replace the active saved connections file."
+            }
+        }
+    }
+
+    /// Verify recovery in the native field's synchronous scope, then discard
+    /// the phrase before awaiting macOS. No readable output is created here.
+    func prepareExport(passphrase: String? = nil) throws -> ExportPreparation {
         guard !isManagedBuild else { throw ConnectionFileStore.StoreError.encrypted }
         guard !isAuthenticating else { throw AppLockError.invalidPreparation }
         guard access == .open else {
@@ -589,15 +651,98 @@ final class ConnectionStore {
                 : ConnectionFileStore.StoreError.encrypted
         }
 
+        guard try fileStore.readSnapshot().revision == loadedRevision else {
+            throw ExportError.invalidAuthorization
+        }
+
         if let vault {
             guard let passphrase else { throw VaultError.wrongPassphrase }
             try VaultCrypto.verifyPassphrase(in: vault, passphrase: passphrase)
         }
 
+        let instant = exportClock()
+        guard instant.isFinite else { throw ExportError.expired }
+        cancelAuthentication()
+        let prepared = ExportPreparation(generation: authenticationGeneration,
+                                         revision: loadedRevision, createdAt: instant)
+        pendingExport = prepared
+        isAuthenticating = true
+        return prepared
+    }
+
+    func cancelExport(_ prepared: ExportPreparation? = nil) {
+        if pendingExport != nil, prepared == nil || prepared === pendingExport {
+            cancelAuthentication()
+        }
+    }
+
+    private func validateExportDestination(_ url: URL) throws {
+        guard url.isFileURL,
+              url.resolvingSymlinksInPath().standardizedFileURL
+                != fileURL.resolvingSymlinksInPath().standardizedFileURL else {
+            throw ExportError.activeStoreDestination
+        }
+        // Case-insensitive volumes can name the same inode with different
+        // spelling even when the normalized URLs do not compare equal.
+        var source = stat()
+        var destination = stat()
+        if lstat(fileURL.path, &source) == 0, lstat(url.path, &destination) == 0,
+           source.st_dev == destination.st_dev, source.st_ino == destination.st_ino {
+            throw ExportError.activeStoreDestination
+        }
+    }
+
+    private func validateExport(_ prepared: ExportPreparation) throws {
+        try Task.checkCancellation()
+        guard prepared === pendingExport, prepared.generation == authenticationGeneration,
+              prepared.revision == loadedRevision, access == .open, isAuthenticating,
+              !isManagedBuild else { throw ExportError.invalidAuthorization }
+        let instant = exportClock()
+        guard instant.isFinite, instant >= prepared.createdAt,
+              instant - prepared.createdAt < 60 else { throw ExportError.expired }
+    }
+
+    /// Run before presenting a destination picker. Never accepts a prior
+    /// unlock/display lease: every export creates a new system challenge.
+    func authorizeExport(_ prepared: ExportPreparation, validateAccess: () -> Bool) async throws {
+        guard prepared === pendingExport, !prepared.started else {
+            throw ExportError.invalidAuthorization
+        }
+        prepared.started = true
+        defer {
+            if prepared === pendingExport, !prepared.ownerAuthenticated { cancelAuthentication() }
+        }
+        try validateExport(prepared)
+        try await exportAuthenticator.authenticate(reason: "Export a readable copy of your SSH-Wakey connections")
+        guard validateAccess() else { throw ExportError.invalidAuthorization }
+        try validateExport(prepared)
+        guard try fileStore.readSnapshot().revision == prepared.revision else {
+            throw ExportError.invalidAuthorization
+        }
+        prepared.ownerAuthenticated = true
+    }
+
+    /// The only export writer. Both checks must still authorize this exact
+    /// revision after the save dialog closes. Success and failure both consume
+    /// the authorization; no retry or second destination can reuse it.
+    func export(_ prepared: ExportPreparation, to url: URL, validateAccess: () -> Bool) throws {
+        defer {
+            if prepared === pendingExport { cancelAuthentication() }
+        }
+        guard prepared.ownerAuthenticated, validateAccess() else {
+            throw ExportError.invalidAuthorization
+        }
+        try validateExport(prepared)
+        guard try fileStore.readSnapshot().revision == prepared.revision else {
+            throw ExportError.invalidAuthorization
+        }
+        try validateExportDestination(url)
+
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(ConnectionFileStore.Document(connections: connections))
+        try validateExport(prepared)
         try ProtectedFile.write(data, to: url)
     }
 }

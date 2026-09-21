@@ -14,6 +14,7 @@ struct SecuritySettingsView: View {
     @State private var note: String?
     @State private var operation: Task<Void, Never>?
     @State private var operationID: UUID?
+    @State private var exportPanel: NSSavePanel?
 
     var body: some View {
         Form {
@@ -83,7 +84,8 @@ struct SecuritySettingsView: View {
                 if store.isAuthenticating {
                     HStack {
                         ProgressView().controlSize(.small)
-                        Text("Waiting for macOS authentication…").font(.caption)
+                        Text(exportPanel == nil ? "Waiting for macOS authentication…"
+                             : "Choose where to save the export…").font(.caption)
                         Button("Cancel") { cancelOperation() }
                     }
                 }
@@ -94,10 +96,15 @@ struct SecuritySettingsView: View {
                     Button("Change Recovery Passphrase…") { sheet = .change }
                         .disabled(store.isLocked || store.isUnavailable || store.isAuthenticating)
                     Button("Turn Off Encryption…") { sheet = .disable }
-                        .disabled(store.isLocked || store.isUnavailable || store.isAuthenticating
-                                  || store.isAppLockEnabled)
-                    if store.isAppLockEnabled {
-                        Text("Turn off App Lock before removing connection-file encryption.")
+                        .disabled(store.isLocked || store.isUnavailable || store.isAuthenticating)
+                    if store.isLocked {
+                        Text("Unlock SSH-Wakey to change encryption settings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if store.isAppLockEnabled {
+                        Text("Turn off App Lock before turning off encryption without erasing your "
+                             + "connections. A destructive reset remains available inside Turn Off "
+                             + "Encryption.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -109,8 +116,9 @@ struct SecuritySettingsView: View {
                 Button("Export a Readable Copy…", action: export)
                     .disabled(store.isLocked || store.isUnavailable || store.isAuthenticating)
             } footer: {
-                Text("An export is an ordinary, unencrypted file. It is the copy to keep somewhere "
-                     + "safe before you need it, and the one to keep out of shared folders.")
+                Text("Export requires Touch ID or your Mac login password, plus your recovery "
+                     + "passphrase when encryption is on. The exported file is unencrypted; "
+                     + "keep it somewhere safe and out of shared folders.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -137,6 +145,8 @@ struct SecuritySettingsView: View {
         .formStyle(.grouped)
         .frame(width: 500, height: 580)
         .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in
+            exportPanel?.cancel(nil)
+            store.cancelExport()
             operation?.cancel()
             operation = nil
             operationID = nil
@@ -144,9 +154,18 @@ struct SecuritySettingsView: View {
             note = nil
             problem = nil
         }
+        .onDisappear {
+            exportPanel?.cancel(nil)
+            store.cancelExport()
+            operation?.cancel()
+            operation = nil
+            operationID = nil
+        }
         .sheet(item: $sheet) { purpose in
             PassphraseSheet(
                 purpose: purpose,
+                submissionDisabled: purpose.offersDestructiveClear
+                    && (store.isLocked || store.isAppLockEnabled),
                 onSubmit: { entry in
                     // Recovery is deliberately available while locked. Every
                     // other action must still own a current inactivity lease.
@@ -175,9 +194,9 @@ struct SecuritySettingsView: View {
                     case .disable:
                         try store.disableEncryption(passphrase: entry.new)
                         announce("Encryption is off. The file is plain text again.")
-                    case .export(let url):
-                        try store.export(to: url, passphrase: entry.new)
-                        announce("Exported to \(url.lastPathComponent).")
+                    case .export:
+                        let prepared = try store.prepareExport(passphrase: entry.new)
+                        startExport(prepared)
                     case .enableAppLock:
                         let preparation = try store.prepareEnableAppLock(passphrase: entry.new)
                         startOperation(success: "App Lock is on. The app locks after five minutes without activity.") {
@@ -192,7 +211,9 @@ struct SecuritySettingsView: View {
                     security.refresh()
                     sheet = nil
                 },
-                onCancel: { sheet = nil })
+                onCancel: { sheet = nil },
+                onClearEncryption: purpose.offersDestructiveClear
+                    ? clearEncryptionAndConnections : nil)
         }
     }
 
@@ -215,37 +236,62 @@ struct SecuritySettingsView: View {
 
     private static let encryptedExplanation = """
     There are two ways in. A key in your Keychain opens it silently every time. Your recovery \
-    passphrase opens it if that key is ever gone. Losing one does not lose the other.
+    passphrase opens it if that key is ever gone. Losing one does not lose the other. Viewing \
+    saved details requires Touch ID or your Mac login password for a brief period.
     """
 
-    /// Destination first, then the passphrase, so it is held only for the
-    /// moment it takes to write the file.
+    /// Credentials come first. The synchronous preparation retains no phrase
+    /// while macOS authenticates or the user chooses a destination.
     private func export() {
         guard security.authorizeCurrentAccess() else { return }
+        problem = nil
+        note = nil
+        if store.isEncrypted {
+            sheet = .export
+        } else {
+            do { startExport(try store.prepareExport()) }
+            catch { problem = error.localizedDescription }
+        }
+    }
+
+    private func chooseExportDestination() async -> URL? {
         let panel = NSSavePanel()
         panel.title = "Export Connections"
         panel.nameFieldStringValue = "SSH-Wakey connections.json"
         panel.allowedContentTypes = [.json]
         panel.canCreateDirectories = true
         panel.message = "This copy is not encrypted."
-
-        guard panel.runModal() == .OK, let url = panel.url,
-              security.authorizeCurrentAccess() else { return }
-
-        guard store.isEncrypted else {
-            run { try store.export(to: url) }
-            if problem == nil { announce("Exported to \(url.lastPathComponent).") }
-            return
+        exportPanel = panel
+        defer { exportPanel = nil }
+        NSApp.activate(ignoringOtherApps: true)
+        let response = await withCheckedContinuation { continuation in
+            panel.begin { continuation.resume(returning: $0) }
         }
-        sheet = .export(url)
+        return response == .OK ? panel.url : nil
     }
 
-    private func run(_ work: () throws -> Void) {
-        do {
-            try work()
-            problem = nil
-        } catch {
-            problem = error.localizedDescription
+    private func startExport(_ prepared: ConnectionStore.ExportPreparation) {
+        let id = UUID()
+        operationID = id
+        problem = nil
+        note = nil
+        security.refresh()
+        operation = Task { @MainActor in
+            defer {
+                if operationID == id {
+                    operation = nil
+                    operationID = nil
+                }
+            }
+            do {
+                let url = try await security.export(prepared, chooseDestination: chooseExportDestination)
+                if let url, operationID == id, !Task.isCancelled {
+                    announce("Exported to \(url.lastPathComponent).")
+                }
+            } catch is CancellationError { }
+            catch {
+                if operationID == id, !Task.isCancelled { problem = error.localizedDescription }
+            }
         }
     }
 
@@ -254,11 +300,25 @@ struct SecuritySettingsView: View {
         problem = nil
     }
 
+    /// Recovery is intentionally unnecessary: this path destroys the vault
+    /// without exposing any of the data it protected.
+    private func clearEncryptionAndConnections() throws {
+        try store.clearEncryptionAndConnections()
+        security.sessions.disconnectAll()
+        security.refresh()
+        announce("Encryption was cleared. All saved connections were erased.")
+        sheet = nil
+    }
+
     private func cancelOperation() {
+        let wasExporting = store.isExporting
+        exportPanel?.cancel(nil)
+        store.cancelExport()
         operation?.cancel()
         operation = nil
         operationID = nil
-        security.lockNow()
+        if wasExporting { security.refresh() }
+        else { security.lockNow() }
     }
 
     /// Only prepared encrypted material and owned key objects cross this await;

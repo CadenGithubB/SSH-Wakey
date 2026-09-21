@@ -172,7 +172,7 @@ final class AppLockController {
         return instant
     }
 
-    nonisolated private static func continuousUptime() -> TimeInterval {
+    nonisolated static func continuousUptime() -> TimeInterval {
         var scale = mach_timebase_info_data_t()
         guard mach_timebase_info(&scale) == KERN_SUCCESS, scale.denom != 0 else { return .nan }
         return Double(mach_continuous_time()) * Double(scale.numer) / Double(scale.denom) / 1_000_000_000

@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.4.0 (build 6) — 2026-09-21
+
+### Added
+
+- Every readable export requires fresh Touch ID or Mac login-password
+  authentication, plus the recovery passphrase for encrypted stores. Credentials
+  are checked before choosing a destination. Authorization is single-use,
+  short-lived, and invalidated by cancellation, lock, or vault changes.
+- Viewing details from an encrypted vault now requires Touch ID or the Mac
+  login password. Authorization lasts for at most one minute without being
+  extended by use, and visible details close when the app becomes inactive,
+  the vault locks, or the authorization expires.
+- Settings can now clear an encrypted vault and its local key when recovery is
+  no longer possible from the Turn Off Encryption sheet. The deliberately
+  destructive reset requires confirmation, erases all saved connections and
+  history, disconnects open sessions, and returns the app to an empty
+  unencrypted state.
+
+### Changed
+
+- Help, Settings, and the available Lock action now live in the main window's
+  top-right toolbar instead of crowding the connection-action row.
+- The main window corners are subtly less rounded.
+- Turn Off Encryption is unavailable until the app is unlocked.
+
+### Fixed
+
+- macOS authentication for revealing encrypted details no longer cancels itself
+  when its password prompt temporarily takes focus from SSH-Wakey.
+- Readable exports cannot replace the active saved-connections file, including
+  a differently capitalized path to the same file. Exporting preserves active
+  SSH sessions; a vault lock still disconnects them.
+
+### Validation and distribution
+
+- Standard and Managed each passed all 416 regression tests. Both universal
+  ZIPs passed signature, Hardened Runtime, sandbox-entitlement and privacy checks.
+- Downloads remain ad-hoc signed and are not Developer ID signed or notarized.
+
 ## 1.3.0 (build 5) — 2026-09-20
 
 ### Added

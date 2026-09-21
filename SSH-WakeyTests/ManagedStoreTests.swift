@@ -94,7 +94,7 @@ final class ManagedStoreTests: XCTestCase {
     func testEncryptionAndExportAreRefused() throws {
         XCTAssertNoThrow(try store.enableEncryption(passphrase: "a-long-enough-passphrase"))
         XCTAssertFalse(store.isEncrypted)
-        XCTAssertThrowsError(try store.export(to: directory.appendingPathComponent("out.json")))
+        XCTAssertThrowsError(try store.prepareExport())
         XCTAssertFalse(FileManager.default.fileExists(
             atPath: directory.appendingPathComponent("out.json").path))
     }

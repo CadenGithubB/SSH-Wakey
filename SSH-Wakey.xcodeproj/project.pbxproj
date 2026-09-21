@@ -536,8 +536,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 5;
-				MARKETING_VERSION = 1.3.0;
+				CURRENT_PROJECT_VERSION = 6;
+				MARKETING_VERSION = 1.4.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -573,8 +573,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 5;
-				MARKETING_VERSION = 1.3.0;
+				CURRENT_PROJECT_VERSION = 6;
+				MARKETING_VERSION = 1.4.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -654,8 +654,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 5;
-				MARKETING_VERSION = 1.3.0;
+				CURRENT_PROJECT_VERSION = 6;
+				MARKETING_VERSION = 1.4.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -691,8 +691,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 5;
-				MARKETING_VERSION = 1.3.0;
+				CURRENT_PROJECT_VERSION = 6;
+				MARKETING_VERSION = 1.4.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;

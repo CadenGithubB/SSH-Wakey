@@ -160,6 +160,13 @@ This contains connection metadata, MAC addresses and edit history, never SSH
 passwords. History retains old metadata values. The eye control hides display
 fields; it does not encrypt metadata or remove it from memory.
 
+For encrypted stores, revealing a row or opening its Edit or Activity view
+requires Touch ID or the Mac login password. This grants a non-renewing display
+lease of at most one minute. App deactivation, vault lock and expiry hide the
+details and close those views. The authentication prompt itself may temporarily
+deactivate the app without cancelling its own challenge. This is an application
+display control over already-open metadata, not a separate encryption layer.
+
 Private-file access walks parent directories using descriptors and refuses
 user-controlled symlinks, unsafe owners, writable ancestors, unsafe ACL grants,
 nonregular files, hard links and oversized content. New files are created in a
@@ -190,6 +197,24 @@ Standard stores learned MAC addresses within the same connection file and remove
 its legacy plaintext sidecar when encryption is enabled/opened. Managed has a
 separate private MAC cache for its IT-provided catalog; it has no encrypted user
 vault. Managed entries are validated before they can be launched.
+
+Readable connection exports require fresh macOS owner authentication on every
+attempt, including for unencrypted stores. Encrypted stores first verify the
+recovery passphrase against the vault payload. The native field's scoped phrase
+is discarded before the asynchronous macOS challenge; a one-use preparation
+retains no phrase, key or serialized connections. Only after both checks does
+the save dialog appear. The writer rechecks the exact vault revision, current
+access, cancellation and a one-minute deadline measured with continuous uptime.
+Lock, reload, cancellation and expiry revoke the preparation. Authentication
+failure cannot fall back to a previous unlock or display lease. No readable
+output is created before Save, and an export cannot overwrite the active store.
+
+Clear Encryption, inside Turn Off Encryption, is a separate destructive action.
+The Settings entry is unavailable while locked. After explicit confirmation it
+replaces the local vault with an empty unencrypted list, removes the local
+Keychain key, turns off App Lock and disconnects sessions. It does not reveal
+the discarded connections, so it does not require their recovery passphrase.
+This removes current app data; it does not securely erase historical copies.
 
 Exports are explicitly plaintext. Recovery passphrase Copy deliberately puts a
 secret on the clipboard. Concealed/transient/local-only pasteboard hints and

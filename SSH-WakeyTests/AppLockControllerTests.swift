@@ -207,6 +207,143 @@ final class AppLockControllerTests: XCTestCase {
     }
 }
 
+@MainActor
+final class DetailRevealControllerTests: XCTestCase {
+    private var instant: TimeInterval = 1000
+
+    func testAuthenticationStartsASixtySecondLeaseAndIsReused() async {
+        let authenticator = TestDetailAuthenticator()
+        let controller = DetailRevealController(
+            now: { [unowned self] in self.instant }, authenticator: authenticator)
+
+        let firstAuthorization = await controller.authorize()
+        XCTAssertTrue(firstAuthorization)
+        XCTAssertTrue(controller.isAuthorized)
+        XCTAssertEqual(controller.deadline, 1060)
+        XCTAssertEqual(authenticator.callCount, 1)
+
+        instant = 1059
+        let reusedAuthorization = await controller.authorize()
+        XCTAssertTrue(reusedAuthorization)
+        XCTAssertEqual(authenticator.callCount, 1, "using the lease must not prompt again")
+        XCTAssertEqual(controller.deadline, 1060, "using the lease must not extend it")
+    }
+
+    func testLeaseExpiresClosedAtItsDeadline() async {
+        let authenticator = TestDetailAuthenticator()
+        let controller = DetailRevealController(
+            now: { [unowned self] in self.instant }, authenticator: authenticator)
+        let authorized = await controller.authorize()
+        XCTAssertTrue(authorized)
+
+        instant = 1060
+        XCTAssertFalse(controller.checkDeadline())
+        XCTAssertFalse(controller.isAuthorized)
+        XCTAssertNil(controller.deadline)
+        XCTAssertEqual(authenticator.cancelCount, 1)
+    }
+
+    func testRevocationRejectsLateAuthenticationSuccess() async {
+        let authenticator = TestDetailAuthenticator()
+        authenticator.pause = true
+        let controller = DetailRevealController(
+            now: { [unowned self] in self.instant }, authenticator: authenticator)
+        let attempt = Task { await controller.authorize() }
+        await authenticator.waitUntilPaused()
+
+        controller.revoke()
+        authenticator.resume()
+
+        let lateResult = await attempt.value
+        XCTAssertFalse(lateResult)
+        XCTAssertFalse(controller.isAuthorized)
+        XCTAssertFalse(controller.isAuthenticating)
+    }
+
+    func testAuthenticationPromptSurvivesItsOwnApplicationDeactivation() async {
+        let authenticator = TestDetailAuthenticator()
+        authenticator.pause = true
+        let controller = DetailRevealController(
+            now: { [unowned self] in self.instant }, authenticator: authenticator)
+        let attempt = Task { await controller.authorize() }
+        await authenticator.waitUntilPaused()
+
+        XCTAssertFalse(controller.revokeForApplicationDeactivation())
+        XCTAssertTrue(controller.isAuthenticating)
+        XCTAssertEqual(authenticator.cancelCount, 0)
+
+        authenticator.resume()
+        let authorization = await attempt.value
+        XCTAssertTrue(authorization)
+        XCTAssertTrue(controller.isAuthorized)
+    }
+
+    func testApplicationDeactivationRevokesAnExistingRevealLease() async {
+        let authenticator = TestDetailAuthenticator()
+        let controller = DetailRevealController(authenticator: authenticator)
+        let authorization = await controller.authorize()
+        XCTAssertTrue(authorization)
+
+        XCTAssertTrue(controller.revokeForApplicationDeactivation())
+        XCTAssertFalse(controller.isAuthorized)
+        XCTAssertEqual(authenticator.cancelCount, 1)
+    }
+
+    func testAuthenticationFailureIsShownWithoutGrantingAccess() async {
+        let authenticator = TestDetailAuthenticator()
+        authenticator.error = DetailRevealError.authenticationFailed
+        let controller = DetailRevealController(authenticator: authenticator)
+
+        let authorized = await controller.authorize()
+        XCTAssertFalse(authorized)
+        XCTAssertFalse(controller.isAuthorized)
+        XCTAssertEqual(controller.problem, DetailRevealError.authenticationFailed.localizedDescription)
+    }
+
+    func testInvalidIntervalsUseTheOneMinuteDefault() {
+        for interval in [Double.nan, .infinity, -1, 0, 0.5, 301] {
+            XCTAssertEqual(DetailRevealController(interval: interval).interval, 60)
+        }
+        XCTAssertEqual(DetailRevealController(interval: 1).interval, 1)
+        XCTAssertEqual(DetailRevealController(interval: 300).interval, 300)
+    }
+}
+
+@MainActor
+private final class TestDetailAuthenticator: OwnerAuthenticating {
+    var callCount = 0
+    var cancelCount = 0
+    var error: Error?
+    var pause = false
+    private var pending: CheckedContinuation<Void, Never>?
+    private var started: CheckedContinuation<Void, Never>?
+
+    func authenticate(reason: String) async throws {
+        callCount += 1
+        if pause {
+            pause = false
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                started?.resume()
+                started = nil
+            }
+        }
+        if let error { throw error }
+    }
+
+    func cancel() { cancelCount += 1 }
+
+    func waitUntilPaused() async {
+        if pending != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+
+    func resume() {
+        pending?.resume()
+        pending = nil
+    }
+}
+
 /// Uses only uniquely named synthetic pasteboards, never the system clipboard.
 @MainActor
 final class RecoveryClipboardTests: XCTestCase {

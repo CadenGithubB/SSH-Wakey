@@ -4,7 +4,7 @@
 
 # SSH-Wakey
 
-Version **1.3.0** (build **5**). See the [release notes](CHANGELOG.md).
+Version **1.4.0** (build **6**). See the [release notes](CHANGELOG.md).
 
 A small native macOS app that keeps a list of SSH destinations so you do not
 have to remember usernames, addresses and ports when you need to get back into
@@ -344,10 +344,13 @@ automatic locking enabled. Nothing can be edited while it is locked.
 **Export a Readable Copy** writes an ordinary unencrypted file, in exactly the
 format an unencrypted install uses, so it can be read by eye or put straight
 back. It is the copy to keep somewhere safe before you need it, and to keep out
-of shared folders. Turning encryption off does the same thing in place and
-removes the Keychain key. Exporting, turning encryption off and changing the
-passphrase all ask for the current passphrase first, so every route to a lasting
-plain-text copy needs the same proof.
+of shared folders. Every export requires fresh Touch ID or Mac login-password
+authentication. Encrypted stores also require the recovery passphrase, before
+the macOS check. Only after these checks does the save dialog appear. Export
+authorization is single-use and expires after one minute; cancelling, locking,
+or changing the saved vault invalidates it. No readable export is created until
+the final Save. Turning encryption off does the same thing in place and removes
+the Keychain key; it and changing the passphrase require the current passphrase.
 
 The passphrase sheet can generate a strong one and copy it explicitly. Clipboard
 privacy hints and clearing after ninety seconds reduce exposure but do not

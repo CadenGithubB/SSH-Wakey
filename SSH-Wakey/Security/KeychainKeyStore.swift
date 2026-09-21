@@ -179,7 +179,49 @@ final class AppLockAuthentication: @unchecked Sendable {
         if cancelled { throw CancellationError() }
     }
 
+    /// Performs ordinary macOS owner authentication without opening or
+    /// changing a vault. Each instance is a fresh challenge with no reuse of
+    /// an earlier unlock, detail reveal, or export authentication.
+    func authenticateOwner() async throws {
+        try check()
+        var availabilityError: NSError?
+        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &availabilityError) else {
+            throw DetailRevealError.unavailable
+        }
+        do {
+            let accepted = try await withTaskCancellationHandler {
+                try await context.evaluatePolicy(
+                    .deviceOwnerAuthentication,
+                    localizedReason: context.localizedReason)
+            } onCancel: { invalidate() }
+            try check()
+            guard accepted else { throw DetailRevealError.authenticationFailed }
+        } catch let error as LAError where [
+            LAError.userCancel, .appCancel, .systemCancel, .userFallback
+        ].contains(error.code) {
+            throw CancellationError()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw DetailRevealError.authenticationFailed
+        }
+    }
+
     deinit { invalidate() }
+}
+
+enum DetailRevealError: LocalizedError, Equatable {
+    case unavailable
+    case authenticationFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Touch ID or your Mac login password is unavailable."
+        case .authenticationFailed:
+            return "Your Mac could not authenticate this request."
+        }
+    }
 }
 
 /// The private key never leaves the Secure Enclave. Its public, opaque keyblob
