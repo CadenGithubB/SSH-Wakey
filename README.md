@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/app-icon.png" width="128" height="128" alt="SSH-Wakey">
+  <img src="SSH-Wakey/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png" width="128" height="128" alt="SSH-Wakey">
 </p>
 
 # SSH-Wakey
