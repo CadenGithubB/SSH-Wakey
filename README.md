@@ -225,8 +225,9 @@ set would mean guessing a password or a destination.
 
 Edit appears only when exactly one connection is selected, rather than sitting
 there greyed out. Remove works for one row or several. Both are refused while
-any selected machine has a session open. The gear beside them opens Settings,
-where encryption lives.
+any selected machine has a session open. The gear in the main window's top-right
+toolbar opens Settings, where encryption lives. Help and the available Lock
+action are in the same toolbar.
 
 The **Help** menu has **Save Diagnostics…**, which exports recent curated
 connection statuses and destination metadata. Raw server output and prompts are
@@ -625,8 +626,9 @@ memory. See [SECURITY.md](SECURITY.md) for its boundaries.
 
 ## Tests
 
-The suite currently contains **388 tests**, run against both the standard and
-managed app variants during the September 2026 security review.
+The suite currently contains **416 regression tests**. Both Standard and Managed
+passed the suite for version 1.4.0; see [CHANGELOG.md](CHANGELOG.md) for the
+recorded release validation.
 
 The suite covers private-file access, unavailable storage, concurrent writes,
 vault metadata and independent recovery slots, key rotation, managed validation,

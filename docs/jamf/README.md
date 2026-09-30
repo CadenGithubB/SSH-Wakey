@@ -19,11 +19,16 @@ Build the Managed app from this repo:
 xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configuration ManagedRelease -derivedDataPath build build
 ```
 
-The product is `SSH-Wakey Managed.app`. Package that for a Jamf policy, or take
-`SSH-Wakey-Managed.zip` from a GitHub release (`./Scripts/make-zip-managed.sh`
-builds it). A policy install as root usually avoids Gatekeeper. Self Service
-downloads of an ad-hoc signed app still get a quarantine warning; Developer ID
-and notarisation are a later step, not part of this payload.
+The product is `SSH-Wakey Managed.app`. `./Scripts/make-zip-managed.sh` creates
+`build/SSH-Wakey-Managed.zip`, also available from GitHub releases. These are
+ad-hoc-signed verification builds. Before deploying through Jamf, sign all
+components with Developer ID, notarise the result, and test installation and
+password entry on the supported target Macs.
+
+The configuration profile assigns settings; signing and notarisation are
+separate distribution steps. The current ZIP script rejects certificate-signed
+inputs, so Developer ID distribution needs a separate signing and packaging
+workflow. See the [distribution notes](../../README.md#moving-it-to-another-mac).
 
 ## What the employee can do
 

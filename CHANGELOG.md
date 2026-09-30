@@ -76,12 +76,13 @@
   before enabling App Lock; old backups retain their old credentials.
 - Previously accepted SSH options may now be rejected. Hosts trusted only by
   system or user SSH configuration require independent verification in the app.
-- Both standard and managed suites contain 388 tests. Validation includes
-  sandbox-denial probes, synthetic native password submission/cancellation,
-  and arm64/x86_64 release builds with signature and entitlement checks.
+- Version 1.3.0 included 388 tests in each of the Standard and Managed suites.
+  Validation included sandbox-denial probes, synthetic native password
+  submission/cancellation, and arm64/x86_64 release builds with signature and
+  entitlement checks.
 - Local artifacts remain ad-hoc signed. Developer ID signing, notarisation,
   and runtime testing across supported macOS versions and hardware configurations
   remain prerequisites for a broadly validated distribution release.
 
-See [SECURITY.md](SECURITY.md) and the dated reports in [docs/](docs/) for the
-security boundaries, validation evidence, and remaining limitations.
+See [SECURITY.md](SECURITY.md) for the security boundaries and remaining
+limitations.
