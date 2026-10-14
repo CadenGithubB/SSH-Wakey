@@ -5,6 +5,7 @@ import SwiftUI
 struct HostKeyApprovalView: View {
 
     let connection: SSHConnection
+    let mode: ConnectMode
     var authorize: () -> Bool = { true }
     var onTrusted: () -> Void
     var onCancel: () -> Void
@@ -18,15 +19,16 @@ struct HostKeyApprovalView: View {
     @State private var phase: Phase = .loading
     @State private var isWriting = false
     @State private var expectedFingerprint = ""
+    @State private var verifiesFingerprint = false
     @State private var scanTask: Task<Void, Never>?
     @State private var isValid = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Host key for \(connection.host)")
+                Text("Trust “\(connection.name)”?")
                     .font(.headline)
-                Text("This machine does not yet have an approved key in SSH-Wakey.")
+                Text("This is your first connection to this destination in SSH-Wakey.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -46,11 +48,11 @@ struct HostKeyApprovalView: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button(isWriting ? "Adding…" : "Trust Verified Key") {
+                Button(isWriting ? "Saving…" : "Trust & \(mode.buttonTitle)") {
                     trust()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(isWriting || !hasVerifiedKey)
+                .disabled(isWriting || !canTrust)
             }
             .padding(16)
         }
@@ -60,11 +62,15 @@ struct HostKeyApprovalView: View {
         .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in invalidate() }
     }
 
-    private var hasVerifiedKey: Bool {
+    private var canTrust: Bool {
         if case .ready(let keys) = phase, keys.count == 1 {
-            return expectedFingerprint.trimmingCharacters(in: .whitespacesAndNewlines) == keys[0].fingerprint
+            return !verifiesFingerprint || trimmedFingerprint == keys[0].fingerprint
         }
         return false
+    }
+
+    private var trimmedFingerprint: String {
+        expectedFingerprint.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @ViewBuilder
@@ -104,6 +110,24 @@ struct HostKeyApprovalView: View {
 
         case .ready(let keys):
             VStack(alignment: .leading, spacing: 14) {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
+                    GridRow {
+                        Text("Host").foregroundStyle(.secondary)
+                        Text(connection.host).textSelection(.enabled)
+                    }
+                    GridRow {
+                        Text("Port").foregroundStyle(.secondary)
+                        Text(String(connection.port))
+                    }
+                    GridRow {
+                        Text("Username").foregroundStyle(.secondary)
+                        Text(connection.username).textSelection(.enabled)
+                    }
+                }
+
+                Text("SSH-Wakey will remember this key and block future connections if it changes.")
+                    .fixedSize(horizontal: false, vertical: true)
+
                 ForEach(keys) { key in
                     VStack(alignment: .leading, spacing: 3) {
                         Text("\(key.algorithm) · \(key.bits) bits")
@@ -114,23 +138,33 @@ struct HostKeyApprovalView: View {
                     }
                 }
 
-                Label {
-                    Text("""
-                    On the Mac itself, run ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub. Enter its SHA256:… \
-                    fingerprint below. Obtain it directly from the Mac or a trusted administrator; the \
-                    fingerprint displayed above came from the network and is not proof of identity.
-                    """)
+                Text("Trusting without comparing a fingerprint relies on the machine answering at this address being the one you expect.")
                     .font(.caption)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
-                }
-                .padding(10)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
 
-                TextField("Fingerprint independently obtained from the Mac", text: $expectedFingerprint)
-                    .font(.system(size: 11, design: .monospaced))
-                    .textFieldStyle(.roundedBorder)
+                Toggle("Verify fingerprint first (optional)", isOn: $verifiesFingerprint)
+
+                if verifiesFingerprint {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Get the fingerprint directly from the Mac or your administrator. On the Mac, run:")
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub")
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                        TextField("Paste its SHA256:… fingerprint", text: $expectedFingerprint)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textFieldStyle(.roundedBorder)
+                        if !trimmedFingerprint.isEmpty {
+                            Label(canTrust ? "Fingerprints match" : "Fingerprints do not match. Check the destination before continuing.",
+                                  systemImage: canTrust ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundStyle(canTrust ? Color.green : Color.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
             }
         }
     }
@@ -163,10 +197,10 @@ struct HostKeyApprovalView: View {
     }
 
     private func trust() {
-        guard isValid, authorize(), case .ready(let keys) = phase, hasVerifiedKey else { return }
+        guard isValid, !isWriting, authorize(), case .ready(let keys) = phase, canTrust else { return }
         isWriting = true
         do {
-            try HostKeyService.trust(keys)
+            try HostKeyService.trust(keys, expectedFingerprint: verifiesFingerprint ? expectedFingerprint : nil)
             onTrusted()
         } catch {
             phase = .failed(error.localizedDescription)

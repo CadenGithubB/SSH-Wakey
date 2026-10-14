@@ -10,7 +10,8 @@ struct HostKeyCandidate: Identifiable, Equatable, Sendable {
 }
 
 /// Trust belongs to this app. A network scan supplies an untrusted Ed25519
-/// public key; the user must compare its fingerprint independently before enrollment.
+/// public key; enrollment requires explicit user approval, with optional
+/// fingerprint verification through an independent trusted route.
 enum HostKeyService {
     enum HostKeyError: LocalizedError {
         case scanFailed(String)
@@ -97,15 +98,22 @@ enum HostKeyService {
         }
     }
 
-    /// Enroll only one independently verified key. Changed keys require an
-    /// explicit repair of the trust store; appending another trusted alternative
-    /// would silently defeat changed-host detection.
-    static func trust(_ candidates: [HostKeyCandidate], at url: URL = knownHostsURL) throws {
+    /// Enroll only one user-approved key. A supplied independent fingerprint must
+    /// match; omitting it permits explicit trust on first use. Changed keys still
+    /// require an explicit repair of the trust store, because appending another
+    /// trusted alternative would silently defeat changed-host detection.
+    static func trust(_ candidates: [HostKeyCandidate], expectedFingerprint: String? = nil,
+                      at url: URL = knownHostsURL) throws {
         guard candidates.count == 1, let supplied = candidates.first,
               let checked = candidate(for: supplied.knownHostsLine),
               checked.fingerprint == supplied.fingerprint,
               supplied.algorithm == "ED25519", supplied.bits == "256" else {
-            throw HostKeyError.notWritten("Exactly one verified Ed25519 host key is required.")
+            throw HostKeyError.notWritten("Exactly one valid, user-approved Ed25519 host key is required.")
+        }
+        if let expectedFingerprint {
+            guard expectedFingerprint.trimmingCharacters(in: .whitespacesAndNewlines) == checked.fingerprint else {
+                throw HostKeyError.notWritten("The independently obtained fingerprint does not match this host key.")
+            }
         }
         do {
             try ProtectedFile.createPrivateDirectory(at: url.deletingLastPathComponent())

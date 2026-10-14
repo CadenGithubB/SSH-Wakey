@@ -143,6 +143,9 @@ struct ConnectionVault: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let fields = try decoder.container(keyedBy: CodingKeys.self)
         format = try fields.decode(Int.self, forKey: .format)
+        // Checked before any other field, so a vault from a newer version asks
+        // for an update instead of looking damaged.
+        guard (1...Self.currentFormat).contains(format) else { throw VaultError.unsupportedFormat(format) }
         cipher = try fields.decode(String.self, forKey: .cipher)
         payload = try fields.decode(Data.self, forKey: .payload)
         keychainWrappedKey = (try? fields.decode(Data.self, forKey: .keychainWrappedKey)) ?? Data()
@@ -191,7 +194,8 @@ enum VaultError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .unsupportedFormat(let format):
-            return "The encrypted file uses format \(format), which this version cannot read."
+            return "The encrypted file uses format \(format), which this copy of SSH-Wakey is too old "
+                + "to read. Update the app rather than replacing the file."
         case .wrongPassphrase:
             return "That recovery passphrase is not correct."
         case .keychainKeyDoesNotFit:
@@ -248,7 +252,8 @@ enum VaultCrypto {
 
     static func makeDataKey() -> SymmetricKey { SymmetricKey(size: .bits256) }
 
-    /// Builds a vault around a fresh or existing data key.
+    /// Builds a vault around a fresh or existing data key. `spelling` is for
+    /// tests reproducing seals written before passphrases were normalized.
     static func seal(
         _ connections: [SSHConnection],
         dataKey: SymmetricKey,
@@ -256,14 +261,36 @@ enum VaultCrypto {
         passphrase: String,
         salt: Data = randomBytes(ConnectionVault.saltSize),
         rounds: Int = ConnectionVault.defaultRounds,
-        keyProtection: ConnectionVault.KeyProtection = .legacy
+        keyProtection: ConnectionVault.KeyProtection = .legacy,
+        spelling: PassphraseSpelling = .canonical
     ) throws -> ConnectionVault {
         guard passphrase.count >= minimumPassphraseLength else {
             throw VaultError.passphraseTooShort(minimumPassphraseLength)
         }
 
         try keyProtection.validate()
-        let recoveryKey = try derive(passphrase, salt: salt, rounds: rounds)
+        let recoveryKey = try derive(passphrase, salt: salt, rounds: rounds, spelling: spelling)
+        return try seal(connections, dataKey: dataKey, keychainKey: keychainKey,
+                        recoveryKey: recoveryKey, salt: salt, rounds: rounds, keyProtection: keyProtection)
+    }
+
+    /// Rebuilds the recovery slot under a key already derived from, and
+    /// verified against, the same passphrase, keeping that slot's salt and
+    /// rounds. Saves a second derivation when only the protection changes.
+    static func seal(
+        _ connections: [SSHConnection],
+        dataKey: SymmetricKey,
+        keychainKey: SymmetricKey,
+        recoveryKey: SymmetricKey,
+        salt: Data,
+        rounds: Int,
+        keyProtection: ConnectionVault.KeyProtection = .legacy
+    ) throws -> ConnectionVault {
+        guard salt.count == ConnectionVault.saltSize,
+              (ConnectionVault.minimumRounds...ConnectionVault.maximumRounds).contains(rounds) else {
+            throw VaultError.corrupted("the recovery slot is damaged")
+        }
+        try keyProtection.validate()
         var plaintext = try encoder().encode(connections)
         defer { erase(&plaintext) }
         let payload = try box(plaintext, with: dataKey, authenticating: authenticationData(format: ConnectionVault.currentFormat, protection: keyProtection, purpose: .payload))
@@ -294,28 +321,53 @@ enum VaultCrypto {
     }
 
     static func dataKey(from vault: ConnectionVault, passphrase: String) throws -> SymmetricKey {
+        try openRecoverySlot(vault, passphrase: passphrase).dataKey
+    }
+
+    /// Returns the recovery wrapping key as well as the data key, so a caller
+    /// keeping the same passphrase can rebuild the slot without deriving again.
+    private static func openRecoverySlot(
+        _ vault: ConnectionVault, passphrase: String
+    ) throws -> (recoveryKey: SymmetricKey, dataKey: SymmetricKey) {
         try check(vault)
         try checkPassphraseSlot(vault.passphraseSlot)
         guard !passphrase.isEmpty else { throw VaultError.wrongPassphrase }
         let slot = vault.passphraseSlot
-        let wrapping = try derive(passphrase, salt: slot.salt, rounds: slot.rounds)
-        guard var opened = try? unbox(slot.wrappedKey, with: wrapping, authenticating: authenticationData(vault, purpose: .recovery)) else {
-            throw VaultError.wrongPassphrase
+        let authentication = try authenticationData(vault, purpose: .recovery)
+        for spelling in openingSpellings(of: passphrase) {
+            let wrapping = try derive(passphrase, salt: slot.salt, rounds: slot.rounds, spelling: spelling)
+            guard var opened = try? unbox(slot.wrappedKey, with: wrapping, authenticating: authentication) else {
+                continue
+            }
+            defer { erase(&opened) }
+            guard opened.count == 32 else { throw VaultError.corrupted("invalid data key size") }
+            return (wrapping, opened.withUnsafeBytes { SymmetricKey(data: $0) })
         }
-        defer { erase(&opened) }
-        guard opened.count == 32 else { throw VaultError.corrupted("invalid data key size") }
-        return opened.withUnsafeBytes { SymmetricKey(data: $0) }
+        throw VaultError.wrongPassphrase
     }
 
     /// A recovery wrapper is an independent slot. Successfully opening it is
     /// not sufficient authorization: it could have been replaced with a wrapper
     /// for an unrelated key. Verify its key against the authentic payload too.
+    /// Only for a vault with no key open in memory; otherwise use the overload.
     static func verifyPassphrase(in vault: ConnectionVault, passphrase: String) throws {
         let key = try dataKey(from: vault, passphrase: passphrase)
         guard var plaintext = try? unbox(vault.payload, with: key, authenticating: authenticationData(vault, purpose: .payload)) else {
             throw VaultError.wrongPassphrase
         }
         erase(&plaintext)
+    }
+
+    /// The same proof against the data key already open in memory. That key
+    /// was authenticated when the payload opened, so a recovery slot that
+    /// unwraps to it proves as much without decrypting the connection list
+    /// into another plaintext buffer. Returns the verified recovery key.
+    @discardableResult
+    static func verifyPassphrase(in vault: ConnectionVault, passphrase: String,
+                                 matches openDataKey: SymmetricKey) throws -> SymmetricKey {
+        let opened = try openRecoverySlot(vault, passphrase: passphrase)
+        guard constantTimeEqual(opened.dataKey, openDataKey) else { throw VaultError.wrongPassphrase }
+        return opened.recoveryKey
     }
 
     static func connections(in vault: ConnectionVault, using dataKey: SymmetricKey) throws -> [SSHConnection] {
@@ -344,28 +396,6 @@ enum VaultCrypto {
         return updated
     }
 
-    /// Replaces the recovery passphrase without touching the data key, so the
-    /// file itself does not have to be re-encrypted.
-    static func replacingPassphrase(
-        in vault: ConnectionVault,
-        dataKey: SymmetricKey,
-        with passphrase: String,
-        salt: Data = randomBytes(ConnectionVault.saltSize),
-        rounds: Int = ConnectionVault.defaultRounds
-    ) throws -> ConnectionVault {
-        guard passphrase.count >= minimumPassphraseLength else {
-            throw VaultError.passphraseTooShort(minimumPassphraseLength)
-        }
-        var updated = vault
-        let recoveryKey = try derive(passphrase, salt: salt, rounds: rounds)
-        updated.passphraseSlot = ConnectionVault.PassphraseSlot(
-            derivation: ConnectionVault.derivationName,
-            salt: salt,
-            rounds: rounds,
-            wrappedKey: try wrap(dataKey, with: recoveryKey, authenticating: authenticationData(vault, purpose: .recovery)))
-        return updated
-    }
-
     /// Points the Keychain slot at a new Keychain key, for the case where the
     /// old one was lost and the file was opened with the passphrase.
     static func replacingKeychainKey(
@@ -380,12 +410,40 @@ enum VaultCrypto {
 
     // MARK: - Primitives
 
+    /// Salts and other non-secret randomness. arc4random_buf draws from the
+    /// kernel CSPRNG on Darwin and cannot fail, so there is no fallback path
+    /// with different properties.
     static func randomBytes(_ count: Int) -> Data {
         var bytes = [UInt8](repeating: 0, count: count)
-        if SecRandomCopyBytes(kSecRandomDefault, count, &bytes) != errSecSuccess {
-            for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) }
-        }
+        arc4random_buf(&bytes, count)
         return Data(bytes)
+    }
+
+    /// How a passphrase's Unicode becomes bytes for derivation. The same
+    /// accented text can arrive precomposed or decomposed depending on the
+    /// input method or password manager.
+    enum PassphraseSpelling {
+        /// NFC. Every seal written since normalization was added.
+        case canonical
+        /// The bytes exactly as entered, as older seals used.
+        case asTyped
+        /// NFD, for an older seal typed decomposed and now entered precomposed.
+        case decomposed
+    }
+
+    /// NFC first, since current seals use it. The other spellings each cost a
+    /// full derivation, so they are tried only when their bytes differ.
+    private static func openingSpellings(of passphrase: String) -> [PassphraseSpelling] {
+        autoreleasepool {
+            let canonical = passphrase.precomposedStringWithCanonicalMapping.utf8
+            let decomposed = passphrase.decomposedStringWithCanonicalMapping.utf8
+            var spellings: [PassphraseSpelling] = [.canonical]
+            if !passphrase.utf8.elementsEqual(canonical) { spellings.append(.asTyped) }
+            if !decomposed.elementsEqual(canonical), !decomposed.elementsEqual(passphrase.utf8) {
+                spellings.append(.decomposed)
+            }
+            return spellings
+        }
     }
 
     /// PBKDF2-HMAC-SHA256. CryptoKit has no password-based derivation, because
@@ -395,7 +453,8 @@ enum VaultCrypto {
     /// Rounds and salt are also checked on the passphrase opener before this
     /// runs. The guards here are so a direct call cannot trap on `UInt32` or
     /// dereference an empty buffer.
-    static func derive(_ passphrase: String, salt: Data, rounds: Int) throws -> SymmetricKey {
+    static func derive(_ passphrase: String, salt: Data, rounds: Int,
+                       spelling: PassphraseSpelling = .canonical) throws -> SymmetricKey {
         guard let roundCount = UInt32(exactly: rounds),
               (ConnectionVault.minimumRounds...ConnectionVault.maximumRounds).contains(rounds) else {
             throw VaultError.corrupted("key derivation failed")
@@ -404,10 +463,19 @@ enum VaultCrypto {
             throw VaultError.corrupted("key derivation failed")
         }
 
-        guard !passphrase.isEmpty, passphrase.utf8.count <= maximumPassphraseBytes else {
-            throw VaultError.corrupted("the recovery passphrase has an unsupported size")
+        // The normalized copy is released with this pool, not with the caller's.
+        let input = try autoreleasepool { () throws -> SecureBuffer in
+            let spelled: String
+            switch spelling {
+            case .canonical: spelled = passphrase.precomposedStringWithCanonicalMapping
+            case .asTyped: spelled = passphrase
+            case .decomposed: spelled = passphrase.decomposedStringWithCanonicalMapping
+            }
+            guard !spelled.isEmpty, spelled.utf8.count <= maximumPassphraseBytes else {
+                throw VaultError.corrupted("the recovery passphrase has an unsupported size")
+            }
+            return try SecureBuffer(spelled)
         }
-        let input = try SecureBuffer(passphrase)
         defer { input.wipe() }
         let output = try SecureBuffer(capacity: 32)
         defer { output.wipe() }
@@ -450,13 +518,26 @@ enum VaultCrypto {
 
     /// Clears the mutable Data values owned here. CryptoKit/Foundation may have
     /// internal copies; this is not a promise to erase framework-owned memory.
-    private static func erase(_ data: inout Data) {
+    /// memset_s cannot be elided, so every intentional wipe goes through here.
+    static func erase(_ data: inout Data) {
         data.withUnsafeMutableBytes { bytes in
             if let base = bytes.baseAddress, !bytes.isEmpty {
                 memset_s(base, bytes.count, 0, bytes.count)
             }
         }
         data.removeAll(keepingCapacity: false)
+    }
+
+    /// Runs over every byte whatever the first difference.
+    private static func constantTimeEqual(_ lhs: SymmetricKey, _ rhs: SymmetricKey) -> Bool {
+        lhs.withUnsafeBytes { left in
+            rhs.withUnsafeBytes { right in
+                guard left.count == right.count else { return false }
+                var difference: UInt8 = 0
+                for index in 0..<left.count { difference |= left[index] ^ right[index] }
+                return difference == 0
+            }
+        }
     }
 
     private static func box(_ plaintext: Data, with key: SymmetricKey, authenticating authentication: Data) throws -> Data {

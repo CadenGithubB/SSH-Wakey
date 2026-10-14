@@ -338,12 +338,13 @@ final class ConnectionStore {
     /// let a moment at an unlocked app quietly downgrade the file to plain text
     /// and leave it that way without the owner noticing.
     func disableEncryption(passphrase: String) throws {
-        guard !isManagedBuild, !isAuthenticating, isEncrypted, access == .open, let sealed = vault else { return }
+        guard !isManagedBuild, !isAuthenticating, isEncrypted, access == .open,
+              let sealed = vault, let openKey = dataKey else { return }
 
         guard !isAppLockEnabled else { throw AppLockError.invalidPreparation }
 
-        // Verify the recovered key against the payload as well as its wrapper.
-        try VaultCrypto.verifyPassphrase(in: sealed, passphrase: passphrase)
+        // The recovered key must be the one that authenticated the payload.
+        try VaultCrypto.verifyPassphrase(in: sealed, passphrase: passphrase, matches: openKey)
 
         loadedRevision = try fileStore.commit(
             expectedRevision: loadedRevision,
@@ -396,25 +397,33 @@ final class ConnectionStore {
             return
         }
 
+        // Format 1 has no domain separation between its boxes. Ordinary saves
+        // keep the format, and a format-2 recovery slot needs the passphrase,
+        // so this is the one chance to upgrade it. That also rotates the key.
+        let upgrades = stored.format == 1
+            && passphrase.count >= VaultCrypto.minimumPassphraseLength
+        let adoptedKey = upgrades ? VaultCrypto.makeDataKey() : key
         var updated: ConnectionVault?
         loadedRevision = try fileStore.commit(expectedRevision: loadedRevision) {
             let replacement = try KeychainKeyStore.loadOrCreate(account: keychainAccount)
-            let rewrapped = try VaultCrypto.replacingKeychainKey(
-                in: stored, dataKey: key, with: replacement)
+            let rewrapped = upgrades
+                ? try VaultCrypto.seal(saved, dataKey: adoptedKey, keychainKey: replacement,
+                                       passphrase: passphrase)
+                : try VaultCrypto.replacingKeychainKey(in: stored, dataKey: key, with: replacement)
             updated = rewrapped
             return ConnectionFileStore.Document(vault: rewrapped)
         }
 
-        adopt(connections: saved, vault: updated, dataKey: key, encrypted: true)
+        adopt(connections: saved, vault: updated, dataKey: adoptedKey, encrypted: true)
         storageError = nil
     }
 
     /// Retires the old data key as well as the recovery wrapper. An old vault
     /// snapshot plus its passphrase must not decrypt subsequently saved rows.
     func changePassphrase(from current: String, to replacement: String) throws {
-        guard !isManagedBuild, !isAuthenticating, access == .open, let vault, dataKey != nil else { return }
+        guard !isManagedBuild, !isAuthenticating, access == .open, let vault, let dataKey else { return }
         guard !isAppLockEnabled else { throw AppLockError.invalidPreparation }
-        try VaultCrypto.verifyPassphrase(in: vault, passphrase: current)
+        try VaultCrypto.verifyPassphrase(in: vault, passphrase: current, matches: dataKey)
         let replacementDataKey = VaultCrypto.makeDataKey()
         var updated: ConnectionVault?
         loadedRevision = try fileStore.commit(expectedRevision: loadedRevision) {
@@ -497,8 +506,8 @@ final class ConnectionStore {
     private func prepareSecurityChange(_ operation: AppLockPreparation.Operation,
                                        current: String, replacement: String) throws -> AppLockPreparation {
         guard !isManagedBuild, !isAuthenticating, access == .open,
-              let stored = vault, dataKey != nil else { throw AppLockError.invalidPreparation }
-        try VaultCrypto.verifyPassphrase(in: stored, passphrase: current)
+              let stored = vault, let openKey = dataKey else { throw AppLockError.invalidPreparation }
+        let recoveryKey = try VaultCrypto.verifyPassphrase(in: stored, passphrase: current, matches: openKey)
         let protection: ConnectionVault.KeyProtection
         switch operation {
         case .enable: protection = try appLockKeys.makeProtection()
@@ -508,9 +517,20 @@ final class ConnectionStore {
         // Retiring the data key makes a retained pre-migration legacy wrapper
         // useless against all content saved after App Lock is enabled.
         let key = VaultCrypto.makeDataKey()
-        var sealed = try VaultCrypto.seal(
-            connections, dataKey: key, keychainKey: VaultCrypto.makeDataKey(),
-            passphrase: replacement, keyProtection: protection)
+        var sealed: ConnectionVault
+        switch operation {
+        case .enable, .disable:
+            // Same passphrase: wrap the new key under the recovery key just
+            // verified rather than deriving again with a fresh salt.
+            sealed = try VaultCrypto.seal(
+                connections, dataKey: key, keychainKey: VaultCrypto.makeDataKey(),
+                recoveryKey: recoveryKey, salt: stored.passphraseSlot.salt,
+                rounds: stored.passphraseSlot.rounds, keyProtection: protection)
+        case .changePassphrase:
+            sealed = try VaultCrypto.seal(
+                connections, dataKey: key, keychainKey: VaultCrypto.makeDataKey(),
+                passphrase: replacement, keyProtection: protection)
+        }
         sealed.keychainWrappedKey = Data() // filled only after protected authentication
         cancelAuthentication()
         let prepared = AppLockPreparation(operation: operation, storeIdentity: storeIdentity,
@@ -656,8 +676,8 @@ final class ConnectionStore {
         }
 
         if let vault {
-            guard let passphrase else { throw VaultError.wrongPassphrase }
-            try VaultCrypto.verifyPassphrase(in: vault, passphrase: passphrase)
+            guard let passphrase, let dataKey else { throw VaultError.wrongPassphrase }
+            try VaultCrypto.verifyPassphrase(in: vault, passphrase: passphrase, matches: dataKey)
         }
 
         let instant = exportClock()
@@ -741,8 +761,17 @@ final class ConnectionStore {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(ConnectionFileStore.Document(connections: connections))
+        var data = try encoder.encode(ConnectionFileStore.Document(connections: connections))
+        defer { VaultCrypto.erase(&data) }
         try validateExport(prepared)
         try ProtectedFile.write(data, to: url)
+    }
+
+    /// Any Keychain permission prompt for the existing key appears now, while
+    /// no passphrase exists, instead of during the commit with one in memory.
+    /// Ad-hoc rebuilds make that prompt likely.
+    func requestKeychainAccessBeforePassphraseEntry() {
+        guard !isManagedBuild, !isAuthenticating, !isAppLockEnabled else { return }
+        _ = try? KeychainKeyStore.load(account: keychainAccount)
     }
 }

@@ -163,7 +163,7 @@ final class AbandonedSessionTests: XCTestCase {
             try ProtectedFile.createPrivateDirectory(at: folder)
             created.append(folder)
             return folder
-        })
+        }, checkScreenSharing: { _ in false })
         defer { manager.setAppLocked(true) }
         let connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.local")
         manager.connect(connection, mode: .unlock)
@@ -242,4 +242,51 @@ final class AbandonedSessionTests: XCTestCase {
         try ProtectedFile.write(JSONEncoder().encode(reused), to: owner)
         XCTAssertTrue(SSHSessionManager.isAbandoned(folder), "a reused live PID does not own the older session")
     }
+    func testWakeChecksExistingScreenSharingBeforeSendingWake() async throws {
+        var order: [String] = []
+        var manager: SSHSessionManager!
+        let connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.local")
+        let folder = directory.appendingPathComponent("baseline")
+        manager = SSHSessionManager(wake: { _, _ in
+            order.append("wake")
+            manager.cancelConnect(connection.id)
+        }, makeSessionDirectory: {
+            try ProtectedFile.createPrivateDirectory(at: folder)
+            return folder
+        }, checkScreenSharing: { host in
+            XCTAssertEqual(host, "audit.local")
+            order.append("baseline")
+            return true
+        })
+        manager.connect(connection, mode: .unlock)
+        for _ in 0..<100 where manager.state(for: connection.id).isConnecting {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(order, ["baseline", "wake"])
+        XCTAssertEqual(manager.state(for: connection.id), .failed(SSHSessionManager.cancelledFailure))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    func testLockDuringBaselineStopsWakeAndCleansAttempt() async throws {
+        var manager: SSHSessionManager!
+        let folder = directory.appendingPathComponent("baseline-lock")
+        manager = SSHSessionManager(wake: { _, _ in XCTFail("Locked attempt must not send Wake") },
+            makeSessionDirectory: {
+                try ProtectedFile.createPrivateDirectory(at: folder)
+                return folder
+            }, checkScreenSharing: { _ in
+                manager.setAppLocked(true)
+                manager.setAppLocked(false)
+                return true
+            })
+        let connection = SSHConnection(name: "Synthetic", username: "test", host: "audit.local")
+        manager.connect(connection, mode: .unlock)
+        for _ in 0..<100 where manager.state(for: connection.id).isConnecting {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertTrue(manager.states.isEmpty)
+        XCTAssertTrue(manager.diagnostics.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+    }
+
 }

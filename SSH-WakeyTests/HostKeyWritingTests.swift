@@ -20,17 +20,65 @@ final class HostKeyWritingTests: XCTestCase {
         try XCTUnwrap(HostKeyService.candidate(for: line ?? realLine))
     }
 
+    private func syntheticKey(host: String = "host.example", byte: UInt8 = 0x42) throws -> HostKeyCandidate {
+        let prefix: [UInt8] = [0, 0, 0, 11] + Array("ssh-ed25519".utf8) + [0, 0, 0, 32]
+        let blob = Data(prefix + Array(repeating: byte, count: 32))
+        return try key("\(host) ssh-ed25519 \(blob.base64EncodedString())")
+    }
+
     private func write(_ text: String, to url: URL? = nil) throws {
         try ProtectedFile.write(Data(text.utf8), to: url ?? knownHosts)
     }
 
     private var contents: String { (try? String(contentsOf: knownHosts, encoding: .utf8)) ?? "" }
 
-    func testAddingOneVerifiedKeyCreatesPrivateFile() throws {
-        try HostKeyService.trust([key()], at: knownHosts)
-        XCTAssertEqual(contents, realLine + "\n")
+    func testUserApprovedKeyWithoutExpectedFingerprintCreatesPrivateFile() throws {
+        let candidate = try syntheticKey()
+        try HostKeyService.trust([candidate], at: knownHosts)
+        XCTAssertEqual(contents, candidate.knownHostsLine + "\n")
         let attrs = try FileManager.default.attributesOfItem(atPath: knownHosts.path)
         XCTAssertEqual((attrs[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testIndependentFingerprintAllowsSurroundingWhitespace() throws {
+        let candidate = try syntheticKey()
+        try HostKeyService.trust([candidate], expectedFingerprint: " \n\t\(candidate.fingerprint)\r\n ", at: knownHosts)
+        XCTAssertEqual(contents, candidate.knownHostsLine + "\n")
+    }
+
+    func testMismatchedIndependentFingerprintDoesNotCreateOrChangeStore() throws {
+        let candidate = try syntheticKey()
+        let other = try syntheticKey(host: "other.example", byte: 0x43)
+        XCTAssertThrowsError(try HostKeyService.trust([candidate], expectedFingerprint: other.fingerprint, at: knownHosts))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: knownHosts.path))
+
+        try HostKeyService.trust([other], at: knownHosts)
+        XCTAssertThrowsError(try HostKeyService.trust([candidate], expectedFingerprint: other.fingerprint, at: knownHosts))
+        XCTAssertEqual(contents, other.knownHostsLine + "\n")
+    }
+
+    func testEmptyIndependentFingerprintDoesNotCreateOrChangeStore() throws {
+        let candidate = try syntheticKey()
+        for fingerprint in ["", " \n\t\r "] {
+            XCTAssertThrowsError(try HostKeyService.trust([candidate], expectedFingerprint: fingerprint, at: knownHosts))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: knownHosts.path))
+        }
+
+        let existing = try syntheticKey(host: "existing.example")
+        try HostKeyService.trust([existing], at: knownHosts)
+        for fingerprint in ["", " \n\t\r "] {
+            XCTAssertThrowsError(try HostKeyService.trust([candidate], expectedFingerprint: fingerprint, at: knownHosts))
+            XCTAssertEqual(contents, existing.knownHostsLine + "\n")
+        }
+    }
+
+    func testMatchingNewFingerprintCannotReplaceChangedKey() throws {
+        let original = try syntheticKey()
+        let changed = try syntheticKey(byte: 0x43)
+        try HostKeyService.trust([original], at: knownHosts)
+
+        XCTAssertThrowsError(try HostKeyService.trust([changed], expectedFingerprint: changed.fingerprint, at: knownHosts))
+        XCTAssertEqual(contents, original.knownHostsLine + "\n")
     }
 
     func testExistingDestinationsArePreserved() throws {

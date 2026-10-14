@@ -69,7 +69,7 @@ struct StatusPanel: View {
                                 // Full size, unlike the buttons beside it. When
                                 // a host is unknown this is not a footnote, it
                                 // is the thing that has to happen next.
-                                Button("Review host key…", action: onReviewHostKey)
+                                Button("Trust this Mac…", action: onReviewHostKey)
                             }
                             if failure.offersBootHelp {
                                 Button("What SSH-Wakey does", action: onShowHelp)
@@ -153,6 +153,9 @@ struct StatusPanel: View {
             case .unlocked:
                 Image(systemName: "lock.open.fill")
                     .foregroundStyle(.blue)
+            case .wakeResult(let result):
+                Image(systemName: result.desktopReady ? "checkmark.circle.fill" : "info.circle.fill")
+                    .foregroundStyle(result.desktopReady ? .green : .blue)
             case .failed(let failure):
                 Image(systemName: failure.kind == .cancelled ? "xmark.circle" : "exclamationmark.triangle.fill")
                     .foregroundStyle(failure.kind == .cancelled ? Color.secondary : Color.red)
@@ -186,6 +189,8 @@ struct StatusPanel: View {
         case .unlocked:
             guard connection != nil else { return "Logged in, then closed." }
             return "Logged in to \(destination). The connection is closed."
+        case .wakeResult(let result):
+            return result.headline
         case .failed(let failure):
             return failure.headline
         }
@@ -208,6 +213,15 @@ struct StatusPanel: View {
                 ? ConnectMode.unlock.idleGuidance
                 : (connection?.connectMode ?? .unlock).idleGuidance
         case .connecting(let stage):
+            if stage == SSHSessionManager.readinessHeadline {
+                return "Waiting for Screen Sharing to respond, for up to 45 seconds. Your password will not be sent again."
+            }
+            if stage == SSHSessionManager.baselineHeadline {
+                return "Recording the initial Screen Sharing response."
+            }
+            if stage == SSHSessionManager.passwordSentHeadline {
+                return "FileVault may disconnect SSH while macOS starts. SSH-Wakey will not resend your password."
+            }
             return stage == SSHSessionManager.wakingHeadline
                 ? "A wake packet is on the network. SSH starts once the machine can hear it."
                 : HelpNotes.passwordNote
@@ -240,6 +254,8 @@ struct StatusPanel: View {
                     + "No password popup was needed.")
             }
             return lines.joined(separator: "\n\n")
+        case .wakeResult(let result):
+            return result.guidance
         case .failed(let failure):
             return failure.guidance
         }

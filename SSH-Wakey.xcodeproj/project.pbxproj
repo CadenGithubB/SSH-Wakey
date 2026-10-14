@@ -165,7 +165,7 @@
 		AB0000000000000000000098 /* ManagedPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ManagedPolicyTests.swift"; sourceTree = "<group>"; };
 		AB000000000000000000009A /* ManagedStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ManagedStoreTests.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000032 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "README.md"; sourceTree = "<group>"; };
-		AB0000000000000000000033 /* SECURITY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "SECURITY.md"; sourceTree = "<group>"; };
+		AB0000000000000000000033 /* SECURITY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = "SECURITY.md"; path = "docs/SECURITY.md"; sourceTree = "<group>"; };
 		AB0000000000000000000034 /* SSH-Wakey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "SSH-Wakey.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB0000000000000000000035 /* SSH-WakeyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "SSH-WakeyTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AC2000000000000000000001 /* AppLockController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLockController.swift; sourceTree = "<group>"; };
@@ -536,8 +536,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 6;
-				MARKETING_VERSION = 1.4.0;
+				CURRENT_PROJECT_VERSION = 7;
+				MARKETING_VERSION = 1.5.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -573,8 +573,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 6;
-				MARKETING_VERSION = 1.4.0;
+				CURRENT_PROJECT_VERSION = 7;
+				MARKETING_VERSION = 1.5.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -654,8 +654,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 6;
-				MARKETING_VERSION = 1.4.0;
+				CURRENT_PROJECT_VERSION = 7;
+				MARKETING_VERSION = 1.5.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -691,8 +691,8 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				/* Shared by the app and both signed helpers. */
-				CURRENT_PROJECT_VERSION = 6;
-				MARKETING_VERSION = 1.4.0;
+				CURRENT_PROJECT_VERSION = 7;
+				MARKETING_VERSION = 1.5.0;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;

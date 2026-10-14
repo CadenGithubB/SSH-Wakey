@@ -45,7 +45,7 @@ final class NetworkScopeTests: XCTestCase {
     }
 
     @MainActor
-    func testALocalAddressThatCannotBeReachedBlamesThePermission() {
+    func testALocalAddressSuggestsPermissionWithoutClaimingTheCause() {
         let failure = SSHFailure(
             kind: .hostUnreachable, headline: "That machine could not be reached.",
             guidance: "Check the address.", detail: nil)
@@ -55,7 +55,7 @@ final class NetworkScopeTests: XCTestCase {
 
         XCTAssertTrue(annotated.suggestsLocalNetworkPermission)
         XCTAssertTrue(annotated.guidance?.contains("permission") ?? false, annotated.guidance ?? "")
-        XCTAssertTrue(annotated.guidance?.contains("your own network") ?? false, annotated.guidance ?? "")
+        XCTAssertTrue(annotated.guidance?.contains("does not show") ?? false, annotated.guidance ?? "")
     }
 
     @MainActor

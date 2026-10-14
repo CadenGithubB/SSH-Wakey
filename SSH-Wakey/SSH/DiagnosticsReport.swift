@@ -1,5 +1,13 @@
 import Foundation
 
+/// Application-generated observations only; never server text or credentials.
+struct DiagnosticEvent: Equatable, Sendable {
+    var at: Date
+    var message: String
+
+    var text: String { "\(at.formatted(date: .omitted, time: .standard)) — \(message)" }
+}
+
 /// One connection attempt, kept so it can be written out afterwards when
 /// something needs explaining.
 ///
@@ -16,9 +24,11 @@ struct DiagnosticEntry: Identifiable, Sendable {
     var mode: String
     var result: String
     var channel: String
+    var events: [DiagnosticEvent]
 
     init(at: Date, connectionID: UUID, connection: String, destination: String,
-         mode: String, result: String, channel: String, output: String = "") {
+         mode: String, result: String, channel: String, output: String = "",
+         events: [DiagnosticEvent] = []) {
         self.at = at
         self.connectionID = connectionID
         self.connection = connection
@@ -26,6 +36,7 @@ struct DiagnosticEntry: Identifiable, Sendable {
         self.mode = mode
         self.result = result
         self.channel = channel
+        self.events = Array(events.prefix(32))
         // Deliberately discard output; retained for source compatibility with
         // callers that also use transient SSH output to classify a failure.
     }
@@ -90,6 +101,7 @@ enum DiagnosticsReport {
             lines.append(field("Mode", entry.mode))
             lines.append(field("Result", entry.result))
             lines.append(field("Password channel", entry.channel))
+            for event in entry.events { lines.append(field("Observation", event.text)) }
             lines.append("")
         }
 

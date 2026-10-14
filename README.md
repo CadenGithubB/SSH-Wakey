@@ -4,14 +4,14 @@
 
 # SSH-Wakey
 
-Version **1.4.0** (build **6**). See the [release notes](CHANGELOG.md).
+Version **1.5.0** (build **7**). See the [release notes](CHANGELOG.md).
 
 A small native macOS app that keeps a list of SSH destinations so you do not
 have to remember usernames, addresses and ports when you need to get back into
 a machine.
 
 It is a launcher, not a terminal. The password is typed once per attempt, used
-once, and thrown away.
+once, and never saved.
 
 **Standard** (`com.CadenGithubB.sshwakey`) is the public app. You add machines,
 choose Wake or Open a session per host, and can encrypt the saved list. It
@@ -20,7 +20,7 @@ never reads a configuration profile.
 **Managed** (`com.CadenGithubB.sshwakey.managed`) is the IT copy. Jamf assigns
 the list. Wake only: no add, edit, remove, export, or Terminal. The employee
 still types the office Mac password; nothing in the profile is a secret.
-Notes and the schema are in [docs/jamf/README.md](docs/jamf/README.md).
+Notes and the schema are in [docs/JamfDocs/README.md](docs/JamfDocs/README.md).
 
 - Swift and SwiftUI, macOS 14 or later
 - No third-party dependencies at all
@@ -57,7 +57,7 @@ xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey -destination 'platform
 `get-task-allow` entitlement, restricting ordinary debugger attachment and code
 injection. The main app's Debug configuration permits debugger attachment;
 both password helpers retain Hardened Runtime in every configuration.
-[SECURITY.md](SECURITY.md) explains these boundaries and how to check a build.
+[SECURITY.md](docs/SECURITY.md) explains these boundaries and how to check a build.
 
 Local builds are ad-hoc signed (`CODE_SIGN_IDENTITY = "-"`). The main app runs
 `/usr/bin/ssh` and writes its private trust and connection files outside a
@@ -97,46 +97,41 @@ The **SSH-Wakey Managed** scheme (`com.CadenGithubB.sshwakey.managed`) is the IT
 build: Wake only, list from a forced Jamf payload, no add/edit/export. The
 catalog is the live profile, not a copy into `connections.json`. Learned
 Ethernet addresses for Wake are kept in a small local cache. Notes and the
-schema are in [docs/jamf/README.md](docs/jamf/README.md).
+schema are in [docs/JamfDocs/README.md](docs/JamfDocs/README.md).
 
 ```
 xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configuration ManagedRelease build
 ```
 
+### Downloads and packaging
+
+Download the [public app DMG](https://github.com/CadenGithubB/SSH-Wakey/releases/latest/download/SSH-Wakey.dmg)
+or the [managed app DMG](https://github.com/CadenGithubB/SSH-Wakey/releases/latest/download/SSH-Wakey-Managed.dmg).
+Open the image and drag the app to Applications. ZIP alternatives and SHA-256
+checksums are on the [release page](https://github.com/CadenGithubB/SSH-Wakey/releases/latest).
+
+To build the same packages locally:
+
 ```bash
+./Scripts/make-dmg.sh
+./Scripts/make-dmg.sh --managed
 ./Scripts/make-zip.sh
-./Scripts/make-zip-managed.sh
+./Scripts/make-zip.sh --managed
 ```
 
-The first writes `build/SSH-Wakey.zip`. The second writes
-`build/SSH-Wakey-Managed.zip`.
+These write `build/SSH-Wakey.dmg`, `build/SSH-Wakey-Managed.dmg`,
+`build/SSH-Wakey.zip`, and `build/SSH-Wakey-Managed.zip`. Packaging strips local
+source paths and optional build-machine metadata from staged copies, removes
+extended attributes, and re-signs all three components before checking signatures
+and sandbox entitlements. Each disk image is mounted read-only and its contents
+verified before it becomes the final download. ZIP entries use fixed timestamps
+and permissions instead of local filesystem metadata. Certificate-signed inputs
+are refused by this ad-hoc packaging path.
 
-### Moving it to another Mac
-
-```bash
-./Scripts/make-zip.sh
-```
-
-Writes `build/SSH-Wakey.zip`. For the IT copy:
-
-```bash
-./Scripts/make-zip-managed.sh
-```
-
-Writes `build/SSH-Wakey-Managed.zip`. Packaging strips local source paths and
-optional build-machine metadata from staged copies, omits extended attributes
-and ACLs from ZIP entries, and re-signs all three components before checking
-signatures and sandbox entitlements. Unzip the download and move the app to
-Applications. ZIP entries use fixed timestamps and permissions rather than
-copying local filesystem metadata. The legacy DMG scripts are for local use;
-disk images can retain macOS provenance metadata. Certificate-signed inputs are refused by this ad-hoc
-packaging path.
-
-These scripts currently produce local
-ad-hoc-signed verification builds, not notarised distribution artifacts. Before
-sharing either app, sign all components with Developer ID, notarise the result,
-and test installation and password entry on the supported target systems.
-The same distribution checks apply to the Managed app deployed through Jamf.
+The current downloads are ad-hoc signed and are **not Developer ID signed or
+notarized**. Gatekeeper may block them on another Mac. Developer ID signing,
+notarization, and installation/password-entry testing on supported target systems
+remain requirements for general distribution, including Jamf deployment.
 
 ---
 
@@ -147,8 +142,12 @@ The same distribution checks apply to the Managed app deployed through Jamf.
    Open a session is chosen here too, and remembered on that connection.
 2. Select a connection. The menu beside the button is for **that** machine.
 3. Press **Wake** (the default) or **Connect**, or double-click the row.
-4. Verify an unknown host using its independently obtained fingerprint, then
-   type the password in the native popup when SSH requests it. The popup shows
+4. For an unknown host, an approval sheet opens automatically with its host,
+   port, username and fingerprint. If you recognize the destination, choose
+   **Trust & Wake** or **Trust & Connect** to save its key and continue. For
+   stronger identity confirmation, turn on **Verify fingerprint first** and
+   enter the fingerprint obtained from the target or another trusted channel.
+5. Type the password in the native popup when SSH requests it. The popup shows
    the destination and requested action. To change the action, cancel the popup
    and select Wake or Connect in the main window.
 
@@ -157,10 +156,21 @@ Open a session: select an assigned machine and press Wake.
 
 ### The two things the button can do
 
-**Wake** is the default. It logs in to prove the password works and closes the
-connection immediately. That is all a Mac waiting at the FileVault screen
-needs: the login is what unlocks its disk, and nothing has to stay open
-afterwards. Nothing is left running and no Terminal window opens.
+**Wake** is the default. It submits a password over SSH to let a supported Mac
+unlock FileVault, or closes the connection after a confirmed SSH login. No
+Terminal window opens. After either a confirmed login or an unexplained
+connection closure following password submission, it checks the configured SSH
+port and Screen Sharing port (5900) for up to 45 seconds. It verifies the
+12-byte Screen Sharing protocol greeting before displaying **Ready for Remote
+Desktop**. SSH availability alone does not end this wait. A brief check before
+Wake records whether a greeting was observed before password submission.
+That observation is retained through Trust & Wake and appears with timestamps
+in Activity; it does not claim the desktop was already unlocked or usable. No password is resent and no desktop login is attempted.
+
+The main status gives the next action; Activity retains SSH authentication,
+service readiness, and FileVault uncertainty separately. Service readiness does
+not prove FileVault unlocked or that a desktop login succeeded. Explicit
+authentication and host-key errors remain errors.
 
 On a local address it first sends a short wake packet the machine can hear
 while asleep, waits, then starts SSH. The status line says **Waking the
@@ -398,8 +408,11 @@ SSH-Wakey runs `ssh` with `-F /dev/null`, disables global trust files, and uses
 a validated snapshot of its own private `known_hosts` file in Application
 Support. User and system config cannot inject commands or override host trust.
 Strict host-key checking is always enabled. Old settings that disabled it are
-normalized to strict checking. Unknown Ed25519 keys require an independently
-obtained fingerprint before enrollment; changed keys are refused.
+normalized to strict checking. An unknown Ed25519 key needs explicit approval
+before enrollment. First-use trust relies on recognizing the expected destination
+and trusting the network; **Verify fingerprint first** adds an exact comparison
+with an independently obtained fingerprint. A network scan alone does not prove
+the machine's identity. After enrollment, changed keys are refused.
 
 Jump hosts (`-J`), forwarding, arbitrary local commands, authentication overrides
 and algorithm downgrades are unsupported. Extra options are limited to IP version,
@@ -428,10 +441,15 @@ Those copies cannot be guaranteed erased. The helper confines SSH input copies t
 a process that exits; OpenSSH and OS-managed memory are separate boundaries.
 The service has no network or general file-access entitlements. It receives only
 an already-authorized channel, SSH's output pipe, and read-only code handles for
-caller verification. macOS still gives sandboxed processes access to their own
-container and necessary system resources; this is not a claim of zero filesystem
-access. Recovery passphrases also cross native/cryptographic framework boundaries.
-[SECURITY.md](SECURITY.md) documents the complete memory and threat model without
+caller verification. For signature inspection, it briefly stages bounded public
+executable bytes in a private directory under its own sandbox temporary directory,
+then removes them before password entry. A crash during inspection can leave
+public code bytes behind; these copies contain no password or connection data.
+The XPC and socket peer checks still verify the running callers. macOS gives
+sandboxed processes access to their own container and necessary system resources;
+this is not a claim of zero filesystem access. Recovery passphrases also cross
+native/cryptographic framework boundaries.
+[SECURITY.md](docs/SECURITY.md) documents the complete memory and threat model without
 claiming that plaintext never exists in RAM.
 
 Success comes from a verified helper callback that OpenSSH runs after
@@ -448,8 +466,9 @@ attaches to the existing master and fails closed if it disappears.
   passphrase prompts. Successful key authentication needs no password popup.
 - **Independent host trust.** Trust is specific to each SSH-Wakey distribution.
   Existing `~/.ssh/known_hosts` entries are not automatically imported. Ed25519
-  is the supported host-key algorithm; verify the fingerprint on the target or
-  through another trusted channel before enrolling it.
+  is the supported host-key algorithm. You can approve its first key directly,
+  or use **Verify fingerprint first** to compare it with a fingerprint obtained
+  on the target or through another trusted channel.
 - **One session per saved connection** at a time. Jump hosts and forwarding are
   deliberately unavailable in this password flow.
 
@@ -472,10 +491,13 @@ would and enter the password for an account on that Mac. That password unlocks
 the disk and lets it carry on starting up. There is nothing special to switch on
 in SSH-Wakey.
 
-The connection drops a second or two after it succeeds. That is not a failure:
-the Mac closes it while it finishes starting. SSH-Wakey recognises a session that
-ends within 30 seconds and says so, rather than reporting it as an error. Wait
-about half a minute and connect again for a normal session.
+macOS can disconnect SSH after unlocking the data volume, before a normal SSH
+login is confirmed. SSH-Wakey reports password delivery separately from confirmed
+login and checks whether the Mac becomes reachable. A disconnect alone cannot
+prove success or rejection. If the result stays unconfirmed, wait a moment and
+try Remote Desktop; start a new Connect attempt when you need a normal session.
+Apple describes this transition in its
+[SSH and FileVault manual](https://github.com/apple-oss-distributions/OpenSSH/blob/main/apple_ssh_and_filevault.7).
 
 ### macOS 15 (Sequoia) or older on the target: you cannot
 
@@ -611,6 +633,10 @@ windows attached to them), dismisses open editors, clears activity records, and
 releases the open vault key and connection list. Unsaved edits are discarded.
 An explicitly copied recovery phrase is cleared from the clipboard if nothing
 else has replaced it. Unlocking never reconnects a previous session automatically.
+
+With App Lock off, sleep, screen lock and user switching still hide revealed
+connection details, clear a copied recovery phrase and empty a half-filled
+passphrase sheet. The vault itself stays open.
 Terminal scrollback and remote background jobs are outside App Lock's control.
 
 The protected local key uses this Mac's Secure Enclave and requires macOS user
@@ -622,13 +648,13 @@ App Lock or exporting readable data.
 App Lock does not save or reuse remote SSH passwords. Each password-based SSH
 attempt still has its own separate native prompt. App Lock also does not secure
 an already compromised operating system or guarantee erasure of framework-owned
-memory. See [SECURITY.md](SECURITY.md) for its boundaries.
+memory. See [SECURITY.md](docs/SECURITY.md) for its boundaries.
 
 ## Tests
 
-The suite currently contains **416 regression tests**. Both Standard and Managed
-passed the suite for version 1.4.0; see [CHANGELOG.md](CHANGELOG.md) for the
-recorded release validation.
+The suite contains **464 tests**, run against both the standard and managed app
+variants. For version 1.4.0, both variants passed the then-current 416-test suite;
+see [CHANGELOG.md](CHANGELOG.md) for the recorded release validation.
 
 The suite covers private-file access, unavailable storage, concurrent writes,
 vault metadata and independent recovery slots, key rotation, managed validation,

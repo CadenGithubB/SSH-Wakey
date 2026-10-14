@@ -51,6 +51,7 @@ final class SSHOutputClassifierTests: XCTestCase {
         Host key verification failed.
         """
         XCTAssertEqual(kind(stderr), .hostKeyChanged)
+        XCTAssertFalse(SSHOutputClassifier.classify(exitCode: 255, standardError: stderr).offersHostKeyReview)
     }
 
     func testABadExtraArgument() {

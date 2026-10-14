@@ -216,7 +216,8 @@ struct PassphraseSheet: View {
                     Text("""
                     SSH-Wakey does not save this in Passwords. Copy it and add it there yourself \
                     as a new entry. The clipboard is limited to this Mac and cleared again after \
-                    a minute and a half if nothing else has replaced it.
+                    a minute and a half, when SSH-Wakey quits, or when the Mac sleeps or locks, \
+                    if nothing else has replaced it.
                     """)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -262,6 +263,20 @@ struct PassphraseSheet: View {
             fields.secureInput.release()
             fields.setEnabled(false)
             inputProtected = false
+        }
+        // Plain deactivation must keep the fields: creating a vault means
+        // switching to Passwords to save the generated phrase and coming back.
+        // Sleep, screen lock and user switch clear them even without App Lock.
+        .onReceive(NotificationCenter.default.publisher(for: .wakeyDidSuspend)) { _ in
+            guard !fields.isInvalidated else { return }
+            fields.clear()
+            copied = false
+            problem = purpose.wantsConfirmation
+                ? "Your Mac slept, locked or switched users, so these fields and any copied "
+                    + "passphrase were cleared. Enter the passphrase again, or generate a new one "
+                    + "and save that in Passwords instead."
+                : "Your Mac slept, locked or switched users, so this field was cleared. "
+                    + "Enter the passphrase again."
         }
         .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in
             fields.invalidate()
@@ -334,7 +349,9 @@ struct PassphraseSheet: View {
             copied = pasteboard.writeObjects([item])
             let stamp = pasteboard.changeCount
             if copied { RecoveryClipboard.remember(changeCount: stamp) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
+            // Wall-clock time keeps counting while the Mac sleeps. Quitting
+            // ends this timer, so AppDelegate clears the entry on termination.
+            DispatchQueue.main.asyncAfter(wallDeadline: .now() + 90) {
                 RecoveryClipboard.clearIfOwned(changeCount: stamp)
             }
         }
@@ -358,7 +375,9 @@ struct PassphraseSheet: View {
                     throw EntryError.message("Enter the current recovery passphrase.")
                 }
                 if purpose.wantsConfirmation {
-                    guard passphrase == fields.confirmation.stringValue else {
+                    // Compared in the NFC form the key is derived from.
+                    guard passphrase.precomposedStringWithCanonicalMapping.utf8.elementsEqual(
+                        fields.confirmation.stringValue.precomposedStringWithCanonicalMapping.utf8) else {
                         throw EntryError.message("The two passphrases do not match.")
                     }
                     guard passphrase.count >= VaultCrypto.minimumPassphraseLength else {

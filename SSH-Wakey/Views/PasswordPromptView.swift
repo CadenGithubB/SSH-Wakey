@@ -13,7 +13,12 @@ enum PasswordPromptView {
             "Enter a nonempty password of at most 1,022 UTF-8 bytes, without newline or NUL characters."
         }
     }
-    static func collect(authorization: PasswordAuthorization) -> SecureBuffer? {
+    enum Failure: Error { case secureInputUnavailable }
+
+    /// Nil when the person cancels or the authorization lapses. Throws when
+    /// protected input or memory is unavailable, so the app can tell a broken
+    /// helper from a cancellation.
+    static func collect(authorization: PasswordAuthorization) throws -> SecureBuffer? {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         // The XPC service starts without NSApplication.run
@@ -22,7 +27,7 @@ enum PasswordPromptView {
         application.finishLaunching()
         let alert = NSAlert()
         alert.messageText = "Password for \(authorization.grant.context.destination)"
-        alert.informativeText = "The host key has been verified. Enter this Mac's account password to \(authorization.grant.context.action.lowercased())."
+        alert.informativeText = "The host key matches the key you trusted. Enter this Mac's account password to \(authorization.grant.context.action.lowercased())."
         alert.addButton(withTitle: authorization.grant.context.action)
         alert.addButton(withTitle: "Cancel")
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
@@ -34,7 +39,7 @@ enum PasswordPromptView {
         alert.window.initialFirstResponder = field
         let secureInput = SecureInputSession()
         secureInput.acquire()
-        guard secureInput.isActive else { return nil }
+        guard secureInput.isActive else { throw Failure.secureInputUnavailable }
         let notifications = NotificationCenter.default
         let active = notifications.addObserver(forName: NSApplication.didBecomeActiveNotification,
             object: nil, queue: .main) { _ in
@@ -83,6 +88,9 @@ enum PasswordPromptView {
             failure.messageText = "The password was not sent"
             failure.informativeText = error.localizedDescription
             failure.runModal()
+            // An unacceptable password is the person's to retry; a buffer that
+            // could not be allocated or locked is a helper failure.
+            if error is SecureBuffer.BufferError { throw error }
             return nil
         }
     }

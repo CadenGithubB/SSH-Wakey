@@ -95,6 +95,9 @@ struct ActivityLogView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     labeled("Destination", entry.destination)
                     labeled("Password channel", entry.channel)
+                    if !entry.events.isEmpty {
+                        labeled("Timeline", entry.events.map(\.text).joined(separator: "\n"))
+                    }
 
                 }
                 .padding(.top, 2)

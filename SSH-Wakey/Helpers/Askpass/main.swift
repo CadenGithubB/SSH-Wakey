@@ -10,8 +10,10 @@ if AskpassHelper.isAuthenticationCallback() {
     AskpassHelper.reportAuthentication(environment: environment)
 }
 #if DEBUG
-let sandboxProbe = Array(CommandLine.arguments.dropFirst()) == ["--ssh-wakey-sandbox-check", "--diagnostic-only"]
-let requestArguments = sandboxProbe ? [CommandLine.arguments[0], "Password:"] : CommandLine.arguments
+let debugArguments = Array(CommandLine.arguments.dropFirst())
+let sandboxProbe = debugArguments == ["--ssh-wakey-sandbox-check", "--diagnostic-only"]
+let deliveryCheck = debugArguments == ["--ssh-wakey-delivery-check", "--diagnostic-only"]
+let requestArguments = sandboxProbe || deliveryCheck ? [CommandLine.arguments[0], "Password:"] : CommandLine.arguments
 #else
 let requestArguments = CommandLine.arguments
 #endif
@@ -44,6 +46,14 @@ do {
                         fixture: fixture) { result in
                 fputs(result + "\n", stderr)
                 exit(result == "SSHWAKEY_SANDBOX_OK" ? 0 : 1)
+            }
+            return
+        }
+        if deliveryCheck {
+            proxy.deliverSynthetic(channel, output: .standardOutput, appCode: appCode, appInfo: appInfo,
+                                   grant: encoded) { sent in
+                fputs("SSHWAKEY_DELIVERY_EXIT \(sent ? 0 : 1)\n", stderr)
+                exit(sent ? 0 : 1)
             }
             return
         }

@@ -93,7 +93,10 @@ struct SecuritySettingsView: View {
 
             Section {
                 if store.isEncrypted {
-                    Button("Change Recovery Passphrase…") { sheet = .change }
+                    Button("Change Recovery Passphrase…") {
+                        store.requestKeychainAccessBeforePassphraseEntry()
+                        sheet = .change
+                    }
                         .disabled(store.isLocked || store.isUnavailable || store.isAuthenticating)
                     Button("Turn Off Encryption…") { sheet = .disable }
                         .disabled(store.isLocked || store.isUnavailable || store.isAuthenticating)
@@ -109,7 +112,10 @@ struct SecuritySettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    Button("Turn On Encryption…") { sheet = .create }
+                    Button("Turn On Encryption…") {
+                        store.requestKeychainAccessBeforePassphraseEntry()
+                        sheet = .create
+                    }
                         .disabled(store.isUnavailable || store.isAuthenticating)
                 }
 

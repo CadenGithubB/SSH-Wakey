@@ -9,6 +9,8 @@ final class AskpassChannel: @unchecked Sendable {
     struct Outcome: Equatable {
         var served = false
         var authenticated = false
+        var servedAt: Date?
+        var authenticatedAt: Date?
         var repeatedPrompts = 0
         var refusedPrompts: [String] = [] // fixed categories, never server text
         var wrongNonceAttempts = 0
@@ -16,6 +18,8 @@ final class AskpassChannel: @unchecked Sendable {
         var wrongProgramAttempts = 0
         var promptedAt: TimeInterval?
         var cancelled = false
+        /// The helper chain stopped without an explicit cancellation.
+        var helperFailed = false
         mutating func reservePrompt(at time: TimeInterval) -> Bool {
             guard promptedAt == nil else { repeatedPrompts += 1; return false }
             guard !cancelled else { return false }
@@ -30,6 +34,7 @@ final class AskpassChannel: @unchecked Sendable {
                 parts.append("unauthorized helper request refused")
             }
             if cancelled { parts.append("password entry cancelled") }
+            if helperFailed { parts.append("password helper failed") }
             return parts.joined(separator: ", ")
         }
     }
@@ -41,6 +46,7 @@ final class AskpassChannel: @unchecked Sendable {
     private let inputRequirement: String
     private let inputPath: String
     private let beforePasswordEntry: @Sendable () -> Void
+    private let mayRelease: @Sendable () -> Bool
     private let socketPath: String
     private let listener: Int32
     private let condition = NSCondition()
@@ -54,7 +60,8 @@ final class AskpassChannel: @unchecked Sendable {
 
     init(context: AskpassProtocol.Context, directory: URL,
          helperPath: String = HelperLayout.adapterPath,
-         beforePasswordEntry: @escaping @Sendable () -> Void = {}) throws {
+         beforePasswordEntry: @escaping @Sendable () -> Void = {},
+         mayRelease: @escaping @Sendable () -> Bool = { true }) throws {
         let adapter = URL(fileURLWithPath: helperPath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let input = HelperLayout.service(in: adapter)
@@ -66,6 +73,9 @@ final class AskpassChannel: @unchecked Sendable {
         self.inputPath = HelperLayout.executable(in: input, name: HelperLayout.serviceName).resolvingSymlinksInPath().path
         self.context = context
         self.beforePasswordEntry = beforePasswordEntry
+        // A further veto after the input service is ready. It can only
+        // withhold "send"; tests use it to exercise the service's refusal path.
+        self.mayRelease = mayRelease
         self.helperPath = URL(fileURLWithPath: helperPath).resolvingSymlinksInPath().path
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess
@@ -175,7 +185,7 @@ final class AskpassChannel: @unchecked Sendable {
             // after authentication. A server's single askpass prompt argument
             // cannot select this mode in the signed helper.
             guard request.prompt.isEmpty, ssh.isCurrent, peer.isCurrent else { return }
-            record { $0.authenticated = true }
+            record { $0.authenticated = true; $0.authenticatedAt = Date() }
             _ = AskpassProtocol.sendLine("accepted", to: client)
             return
         }
@@ -196,8 +206,8 @@ final class AskpassChannel: @unchecked Sendable {
             expiresAt: start + AskpassProtocol.promptLifetime)
         guard let encoded = AskpassProtocol.encode(grant), AskpassProtocol.sendLine(encoded, to: client),
               let result = AskpassProtocol.readLine(from: client, timeout: AskpassProtocol.promptLifetime + 2)
-        else { record { $0.cancelled = true }; return }
-        guard result == "ready" else { record { $0.cancelled = true }; return }
+        else { recordHelperStop(cancelledByHelper: false); return }
+        guard result == "ready" else { recordHelperStop(cancelledByHelper: result == "cancelled"); return }
         condition.lock(); let invalid = stopped; condition.unlock()
         // Darwin reports the current writer after XPC transfers the connected
         // descriptor. The ready message must now come from our sandboxed input
@@ -206,13 +216,23 @@ final class AskpassChannel: @unchecked Sendable {
               ProcessInfo.processInfo.systemUptime < grant.expiresAt,
               let input = ProcessIdentity.peer(on: client), input.path == inputPath, input.isCurrent,
               HelperIdentity.peer(on: client, matches: inputRequirement) else {
-            record { $0.cancelled = true }; return
+            recordHelperStop(cancelledByHelper: false); return
         }
+        guard mayRelease() else { record { $0.cancelled = true }; return }
         guard AskpassProtocol.sendLine("send", to: client) else { return }
-        if AskpassProtocol.readLine(from: client) == "sent" { record { $0.served = true } }
+        if AskpassProtocol.readLine(from: client) == "sent" { record { $0.served = true; $0.servedAt = Date() } }
     }
 
     private func record(_ change: (inout Outcome) -> Void) {
         condition.lock(); change(&outcomeValue); condition.unlock()
+    }
+
+    /// Only the service's explicit "cancelled" line, or this app stopping the
+    /// attempt, is a cancellation. Anything else means the helper chain broke,
+    /// and must not look like the person pressing Cancel.
+    private func recordHelperStop(cancelledByHelper: Bool) {
+        condition.lock()
+        if cancelledByHelper || stopped { outcomeValue.cancelled = true } else { outcomeValue.helperFailed = true }
+        condition.unlock()
     }
 }

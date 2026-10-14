@@ -96,7 +96,7 @@ struct ConnectionEditorView: View {
                         }
                     }
 
-                    Text("An independently verified Ed25519 host key is required. Unknown or changed keys are refused before authentication.")
+                    Text("On the first connection, confirm that you trust this Mac. You can verify its fingerprint first. Future connections must match its saved key.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

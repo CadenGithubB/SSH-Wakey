@@ -47,7 +47,7 @@ enum HelpNotes {
             """),
         HelpTopic(
             icon: "lock.shield",
-            title: "Your password is used once and then thrown away",
+            title: "Your password is used once and never saved",
             body: """
             A separate native helper submits your password directly to SSH, then clears its controlled \
             buffer and exits. SSH-Wakey does not save it or put it in command arguments. Native \
@@ -79,10 +79,12 @@ enum HelpNotes {
             icon: "terminal",
             title: "Wake connects via SSH, then disconnects",
             body: """
-            The default button is Wake. It logs in just long enough to wake a Mac waiting at the \
-            FileVault screen, then closes the connection. Nothing is left running and no Terminal \
-            window opens. The login is what unlocks the disk; the connection does not need to stay \
-            open afterwards.
+            The default button is Wake. It sends a password over SSH so a supported Mac can unlock \
+            FileVault, or closes SSH after a confirmed login. No Terminal window opens. It then \
+            waits up to 45 seconds for a Screen Sharing response, without resending the password. \
+            Ready for Remote Desktop means that service is responding and you can connect. A check \
+            before Wake records only whether a service greeting was received. Activity keeps the timeline, SSH and \
+            FileVault details; readiness does not prove disk unlock or a completed desktop login.
 
             Open a session is the other option. It logs in and holds the connection open. Once it \
             says Connected, Open in Terminal starts an ordinary shell on that already-authenticated \
@@ -101,15 +103,15 @@ enum HelpNotes {
 
         HelpTopic(
             icon: "lock.shield",
-            title: "Your password is used once and then thrown away",
+            title: "Your password is used once and never saved",
             body: """
             A separate native helper submits your password directly to SSH, then clears its controlled \
             buffer and exits. SSH-Wakey does not save it or put it in command arguments. Native \
             text-entry frameworks and SSH still hold temporary copies in memory.
 
-            It is also never reused. If the machine rejects it, ssh asks again for a second login \
-            method and SSH-Wakey does not answer, because that would be a silent retry with a \
-            password already known to be wrong. You press Wake or Connect and type it again instead.
+            It is also never reused. SSH-Wakey answers only one password prompt per attempt. \
+            A repeated prompt does not by itself prove rejection: FileVault may disconnect SSH \
+            during startup. Wait for the readiness result before deciding whether to try again.
 
             The native field masks the password. The popup itself can appear in screenshots and recordings.
             """),

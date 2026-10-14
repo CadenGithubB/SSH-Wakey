@@ -408,6 +408,28 @@ final class RecoveryClipboardTests: XCTestCase {
         XCTAssertNil(board.string(forType: .string))
     }
 
+    func testQuittingClearsAnOwnedCopiedPhrase() {
+        let board = makePasteboard()
+        let stamp = write("synthetic recovery phrase", to: board)
+        RecoveryClipboard.remember(changeCount: stamp)
+
+        AppDelegate.cleanUpForTermination(sessions: nil, pasteboard: board)
+
+        XCTAssertNil(board.string(forType: .string))
+    }
+
+    func testQuittingLeavesTextAnotherAppCopiedAfterThePhrase() {
+        let board = makePasteboard()
+        let stamp = write("synthetic recovery phrase", to: board)
+        RecoveryClipboard.remember(changeCount: stamp)
+        let unrelatedStamp = write("unrelated copied text", to: board)
+
+        AppDelegate.cleanUpForTermination(sessions: nil, pasteboard: board)
+
+        XCTAssertEqual(board.string(forType: .string), "unrelated copied text")
+        XCTAssertEqual(board.changeCount, unrelatedStamp)
+    }
+
     func testAnExternalReplacementDiscardsTheRememberedOwnershipGeneration() {
         let original = makePasteboard()
         let originalStamp = write("synthetic original generation", to: original)
@@ -427,5 +449,54 @@ final class RecoveryClipboardTests: XCTestCase {
         XCTAssertEqual(replacement.string(forType: .string), "unrelated replacement")
         XCTAssertEqual(original.string(forType: .string), "synthetic original generation",
                        "a stale remembered owner would incorrectly clear this generation")
+    }
+}
+
+/// Lifecycle cleanup with App Lock off. Uses a scratch store and a uniquely
+/// named pasteboard; nothing sleeps the Mac or touches the system clipboard.
+@MainActor
+final class SuspendCleanupTests: XCTestCase {
+    private var directory: URL!
+    private var board: NSPasteboard!
+
+    override func setUp() async throws {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("SSH-WakeySuspend-\(UUID().uuidString)", isDirectory: true)
+        board = NSPasteboard(name: .init("com.CadenGithubB.sshwakey.clipboard-test.\(UUID().uuidString)"))
+    }
+
+    override func tearDown() async throws {
+        RecoveryClipboard.clearIfOwned(pasteboard: board)
+        board.clearContents()
+        board.releaseGlobally()
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    func testSleepWithoutAppLockRevokesDetailsClearsTheClipboardAndPostsSuspend() async {
+        let store = ConnectionStore(
+            fileStore: ConnectionFileStore(directoryURL: directory),
+            keychainAccount: "test-\(UUID().uuidString)", isManagedBuild: false)
+        XCTAssertFalse(store.isAppLockEnabled)
+        let authenticator = TestDetailAuthenticator()
+        let reveal = DetailRevealController(now: { 1000 }, authenticator: authenticator)
+        let security = AppSecurityCoordinator(store: store, sessions: SSHSessionManager(),
+                                              detailReveal: reveal, pasteboard: board)
+        let authorized = await reveal.authorize()
+        XCTAssertTrue(authorized)
+        board.clearContents()
+        XCTAssertTrue(board.setString("synthetic recovery phrase", forType: .string))
+        RecoveryClipboard.remember(changeCount: board.changeCount)
+
+        let suspended = expectation(forNotification: .wakeyDidSuspend, object: nil)
+        let locked = expectation(forNotification: .wakeyDidLock, object: nil)
+        locked.isInverted = true
+
+        security.inactivity.lockNow(reason: .sleep)
+
+        await fulfillment(of: [suspended, locked], timeout: 0.2)
+        XCTAssertFalse(reveal.isAuthorized)
+        XCTAssertEqual(authenticator.cancelCount, 1)
+        XCTAssertNil(board.string(forType: .string))
+        XCTAssertEqual(store.access, .open, "without App Lock the vault itself stays open")
     }
 }

@@ -19,6 +19,7 @@ final class SSHSessionManager {
         /// Logged in and then closed, either because that is all that was
         /// asked for or because the far end hung up straight afterwards.
         case unlocked(Unlocked)
+        case wakeResult(WakeResult)
         case failed(SSHFailure)
 
         var isConnecting: Bool { if case .connecting = self { return true }; return false }
@@ -31,6 +32,48 @@ final class SSHSessionManager {
         var usedPassword: Bool
         /// True when the machine closed the connection rather than the app.
         var closedByServer: Bool
+    }
+
+    /// Reachability is deliberately separate from authentication and disk unlock.
+    struct WakeResult: Equatable {
+        var loginConfirmed: Bool
+        var reachablePort: Int?
+        var checkStopped = false
+        var screenSharingRespondedBeforeSSH: Bool? = nil
+
+        var desktopReady: Bool { reachablePort == 5900 }
+
+        var headline: String {
+            if desktopReady { return "Ready for Remote Desktop" }
+            if checkStopped { return "Readiness check stopped." }
+            return "Screen Sharing hasn’t responded yet."
+        }
+
+        var guidance: String {
+            if desktopReady {
+                return "Your Mac’s Screen Sharing service is responding. You can connect now."
+            }
+            if checkStopped { return "You can try Remote Desktop now, or select Wake to check again." }
+            return "Your Mac may still be starting. Wait a moment, then try Remote Desktop. See Activity for connection details."
+        }
+
+        var activitySummary: String {
+            let login = loginConfirmed ? "SSH login confirmed; connection closed." : "Password sent; SSH ended without confirming login."
+            let readiness: String
+            if desktopReady {
+                readiness = "Screen Sharing protocol greeting verified on port 5900. "
+                    + (screenSharingRespondedBeforeSSH == true ? "Screen Sharing responded before password submission. "
+                       : screenSharingRespondedBeforeSSH == false ? "Screen Sharing was not observed in the initial check; responding afterwards. " : "")
+                    + "FileVault unlock not verified; desktop login not attempted."
+            } else if checkStopped {
+                readiness = "Readiness check stopped."
+            } else if let port = reachablePort {
+                readiness = "TCP port \(port) answered, but no Screen Sharing greeting was verified within 45 seconds; unlock not confirmed."
+            } else {
+                readiness = "No service answered within 45 seconds; unlock not confirmed."
+            }
+            return login + " " + readiness
+        }
     }
 
     struct Connected: Equatable {
@@ -72,12 +115,24 @@ final class SSHSessionManager {
     var onLearnedLinkAddress: ((UUID, String) -> Void)?
     /// Shown in the status panel while a wake packet is on the network.
     static let wakingHeadline = "Waking the machine..."
+    static let passwordSentHeadline = "Password sent. Waiting for the Mac to finish starting…"
+    static let readinessHeadline = "Still waiting for your Mac…"
+    static let baselineHeadline = "Checking Screen Sharing before Wake…"
     /// Managed builds never hold a session, even if a caller asks.
     var forcesUnlock: Bool = AppDistribution.isManagedBuild
     /// The app-lock controller owns this gate. View visibility is not authority
     /// to connect, attach to a master, or publish an asynchronous result.
     private(set) var isAppLocked = false
     private var authorizationGeneration = UUID()
+
+    struct WakeTrace {
+        var connection: SSHConnection
+        var mode: ConnectMode
+        var baseline: Bool?
+        var events: [DiagnosticEvent]
+    }
+    private var traces: [UUID: WakeTrace] = [:]
+    private var pendingHostTrust: [UUID: WakeTrace] = [:]
 
     private var sessions: [UUID: Session] = [:]
     private var attempts: [UUID: Task<Void, Never>] = [:]
@@ -88,10 +143,19 @@ final class SSHSessionManager {
     private var inFlight: [UUID: (process: Process, channel: AskpassChannel, log: SSHDiagnosticStream)] = [:]
     private let wake: (String, String?) async -> Void
     private let makeDirectory: () throws -> URL
+    private let checkReadiness: (String, Int) async -> Int?
+    private let checkScreenSharing: (String) async -> Bool
 
     init(wake: @escaping (String, String?) async -> Void = {
         await NetworkWake.poke(host: $0, hardwareAddress: $1)
-    }, makeSessionDirectory: (() throws -> URL)? = nil) {
+    }, makeSessionDirectory: (() throws -> URL)? = nil,
+       checkReadiness: @escaping (String, Int) async -> Int? = {
+           await WakeReadiness.check(host: $0, sshPort: $1)
+       }, checkScreenSharing: @escaping (String) async -> Bool = {
+           await WakeReadiness.screenSharingAvailable(host: $0)
+       }) {
+        self.checkScreenSharing = checkScreenSharing
+        self.checkReadiness = checkReadiness
         self.wake = wake
         self.makeDirectory = makeSessionDirectory ?? { try Self.makeSessionDirectory() }
     }
@@ -128,6 +192,8 @@ final class SSHSessionManager {
         attemptDirectories.removeAll()
         states.removeAll()
         diagnostics.removeAll()
+        traces.removeAll()
+        pendingHostTrust.removeAll()
         lastActionError = nil
         // Cancelling drops retained work as it unwinds. Swift/framework copies
         // of connection metadata are not claimed to be physically erased.
@@ -145,13 +211,14 @@ final class SSHSessionManager {
     // MARK: - Connecting
 
     /// No password enters the main app. The verified SSH child opens the native helper.
-    func connect(_ connection: SSHConnection, mode: ConnectMode) {
+    func connect(_ connection: SSHConnection, mode: ConnectMode, continuingTrust: Bool = false) {
         guard !isAppLocked else { return }
         let resolvedMode = forcesUnlock ? ConnectMode.unlock : mode
         let id = connection.id
         guard attempts[id] == nil, sessions[id] == nil else {
             return
         }
+        beginAttemptTrace(connection, mode: resolvedMode, continuingTrust: continuingTrust)
         states[id] = .connecting(
             stage: NetworkWake.shouldPoke(
                 host: connection.host, hardwareAddress: connection.hardwareAddress)
@@ -164,7 +231,49 @@ final class SSHSessionManager {
     }
 
     func cancelConnect(_ id: UUID) {
+        discardHostTrustContinuation(id)
         attempts[id]?.cancel()
+    }
+
+    func discardHostTrustContinuation(_ id: UUID) {
+        pendingHostTrust[id] = nil
+    }
+
+    /// Continuation is explicit and bound to the unchanged connection and mode.
+    /// A normal Wake always starts a fresh timeline.
+    func beginAttemptTrace(_ connection: SSHConnection, mode: ConnectMode, continuingTrust: Bool) {
+        guard !isAppLocked else { return }
+        let previous = pendingHostTrust.removeValue(forKey: connection.id)
+        if continuingTrust, let previous, previous.connection == connection, previous.mode == mode {
+            traces[connection.id] = previous
+            observe(connection.id, "Host trusted; continuing the original attempt.")
+        } else {
+            traces[connection.id] = WakeTrace(connection: connection, mode: mode, events: [])
+            observe(connection.id, mode == .unlock ? "Wake requested." : "Connection requested.")
+        }
+    }
+
+    func observeBaseline(_ connectionID: UUID, responded: Bool, at: Date = Date()) {
+        traces[connectionID]?.baseline = responded
+        observe(connectionID, responded
+            ? "Screen Sharing greeting received before password submission."
+            : "No Screen Sharing greeting received during the initial check.", at: at)
+    }
+
+    func retainHostTrustContinuation(_ connectionID: UUID) {
+        observe(connectionID, "Waiting for host trust approval.")
+        if pendingHostTrust.count >= DiagnosticsReport.maximumEntries,
+           let oldest = pendingHostTrust.min(by: {
+               ($0.value.events.first?.at ?? .distantPast) < ($1.value.events.first?.at ?? .distantPast)
+           })?.key { pendingHostTrust[oldest] = nil }
+        pendingHostTrust[connectionID] = traces[connectionID]
+    }
+
+    func initialScreenSharingObservation(_ id: UUID) -> Bool? { traces[id]?.baseline }
+
+    private func observe(_ id: UUID, _ message: String, at: Date = Date()) {
+        guard traces[id] != nil, (traces[id]?.events.count ?? 0) < 24 else { return }
+        traces[id]?.events.append(DiagnosticEvent(at: at, message: message))
     }
 
     private func runAttempt(
@@ -178,6 +287,7 @@ final class SSHSessionManager {
                 attempts[id] = nil
                 inFlight[id] = nil
                 attemptDirectories[id] = nil
+                traces[id] = nil
             }
         }
         guard isAuthorized(generation) else { return }
@@ -208,6 +318,22 @@ final class SSHSessionManager {
                 headline: "Could not create a private folder for the session.",
                 guidance: error.localizedDescription, detail: nil))
             return
+        }
+
+        var screenSharingRespondedBeforeSSH = initialScreenSharingObservation(id)
+        if mode == .unlock, screenSharingRespondedBeforeSSH == nil {
+            states[id] = .connecting(stage: Self.baselineHeadline)
+            screenSharingRespondedBeforeSSH = await checkScreenSharing(connection.host)
+            guard isAuthorized(generation) else {
+                try? FileManager.default.removeItem(at: directory)
+                return
+            }
+            if Task.isCancelled {
+                try? FileManager.default.removeItem(at: directory)
+                states[id] = .failed(Self.cancelledFailure)
+                return
+            }
+            observeBaseline(id, responded: screenSharingRespondedBeforeSSH == true)
         }
 
         if NetworkWake.shouldPoke(host: connection.host, hardwareAddress: connection.hardwareAddress) {
@@ -286,6 +412,7 @@ final class SSHSessionManager {
                 return
             }
             states[id] = .connecting(stage: "Starting ssh…")
+            observe(id, "SSH attempt started.")
             process = Process()
             process.executableURL = URL(fileURLWithPath: SSHCommandBuilder.sshExecutable)
             process.arguments = arguments
@@ -321,6 +448,10 @@ final class SSHSessionManager {
                     outcome = .cancelled
                     break
                 }
+                if channel.outcome.helperFailed {
+                    outcome = .helperFailed
+                    break
+                }
                 if channel.outcome.authenticated {
                     outcome = .authenticated
                     break
@@ -330,6 +461,9 @@ final class SSHSessionManager {
                     outcome = channel.outcome.authenticated
                         ? .authenticated : .exited
                     break
+                }
+                if channel.outcome.served {
+                    states[id] = .connecting(stage: Self.passwordSentHeadline)
                 }
                 let promptDeadline = channel.outcome.promptedAt.map { $0 + AskpassProtocol.promptLifetime } ?? 0
                 let deadline = max(started + Self.overallTimeout, promptDeadline)
@@ -395,6 +529,13 @@ final class SSHSessionManager {
                 headline: "Connection cancelled.",
                 guidance: "The SSH attempt was stopped and its password helper was closed.", detail: nil))
             return
+        case .helperFailed:
+            terminate(process)
+            try? FileManager.default.removeItem(at: directory)
+            record(connection, mode: mode, result: Self.helperFailure.headline,
+                   channel: channel.outcome, output: diagnostics.text)
+            states[id] = .failed(Self.helperFailure)
+            return
         case .timedOut:
             terminate(process)
             try? FileManager.default.removeItem(at: directory)
@@ -423,6 +564,14 @@ final class SSHSessionManager {
                 failure.kind = .askpassRefused
                 failure.headline = "ssh asked for something other than a password."
             }
+            if Self.mayHaveUnlocked(failure: failure, outcome: outcome) {
+                channel.invalidate()
+                log.close()
+                await finishWake(connection, mode: mode, loginConfirmed: false,
+                                 channel: outcome, screenSharingRespondedBeforeSSH: screenSharingRespondedBeforeSSH, generation: generation)
+                return
+            }
+            if failure.kind == .hostKeyUnknown { retainHostTrustContinuation(id) }
             record(connection, mode: mode, result: failure.headline,
                    channel: outcome, output: diagnostics.text)
             states[id] = .failed(Self.annotated(failure, with: outcome, host: connection.host))
@@ -435,11 +584,12 @@ final class SSHSessionManager {
         if mode == .unlock {
             terminate(process)
             try? FileManager.default.removeItem(at: directory)
-            record(connection, mode: mode, result: "Logged in, then closed as asked",
-                   channel: channel.outcome, output: diagnostics.text)
+            let delivered = channel.outcome
+            channel.invalidate()
+            log.close()
             rememberLinkAddress(of: connection, generation: generation)
-            states[id] = .unlocked(
-                Unlocked(at: Date(), usedPassword: usedPassword, closedByServer: false))
+            await finishWake(connection, mode: mode, loginConfirmed: true,
+                             channel: delivered, screenSharingRespondedBeforeSSH: screenSharingRespondedBeforeSSH, generation: generation)
             return
         }
 
@@ -511,6 +661,36 @@ final class SSHSessionManager {
         if !process.isRunning { masterExited(id, process: process, generation: generation) }
     }
 
+    /// A submitted password is not proof of login. Explicit failures retain their
+    /// original meaning; only an otherwise unexplained exit can be a handoff.
+    static func mayHaveUnlocked(failure: SSHFailure, outcome: AskpassChannel.Outcome) -> Bool {
+        outcome.served && !outcome.authenticated && !outcome.cancelled && !outcome.helperFailed
+            && outcome.wrongNonceAttempts == 0 && outcome.wrongUserAttempts == 0
+            && outcome.wrongProgramAttempts == 0
+            && (failure.kind == .unknown || failure.kind == .closedByRemote)
+    }
+
+    /// Reads only the Screen Sharing greeting; no password or login exchange.
+    /// Internal visibility permits synthetic lifecycle tests without real hosts.
+    func finishWake(_ connection: SSHConnection, mode: ConnectMode, loginConfirmed: Bool,
+                    channel: AskpassChannel.Outcome, screenSharingRespondedBeforeSSH: Bool? = nil,
+                    generation: UUID? = nil) async {
+        let generation = generation ?? authorizationGeneration
+        guard isAuthorized(generation) else { return }
+        observe(connection.id, loginConfirmed ? "SSH login confirmed; connection closed." : "SSH ended without confirming login.")
+        observe(connection.id, "Waiting for Screen Sharing to respond.")
+        states[connection.id] = .connecting(stage: Self.readinessHeadline)
+        let port = Task.isCancelled ? nil : await checkReadiness(connection.host, connection.port)
+        guard isAuthorized(generation) else { return }
+        let result = WakeResult(loginConfirmed: loginConfirmed,
+                                reachablePort: Task.isCancelled ? nil : port,
+                                checkStopped: Task.isCancelled, screenSharingRespondedBeforeSSH: screenSharingRespondedBeforeSSH)
+        observe(connection.id, result.desktopReady ? "Screen Sharing greeting verified; ready for Remote Desktop."
+            : result.checkStopped ? "Readiness check stopped." : "Screen Sharing check ended without a verified greeting.")
+        record(connection, mode: mode, result: result.activitySummary, channel: channel, output: "")
+        states[connection.id] = .wakeResult(result)
+    }
+
     /// Attempts recorded for one saved connection, newest first.
     func diagnostics(for connectionID: UUID) -> [DiagnosticEntry] {
         DiagnosticsReport.entries(diagnostics, for: connectionID)
@@ -524,6 +704,9 @@ final class SSHSessionManager {
         channel: AskpassChannel.Outcome,
         output: String
     ) {
+        var events = traces[connection.id]?.events ?? []
+        if let at = channel.servedAt { events.append(DiagnosticEvent(at: at, message: "Password submitted by the native helper.")) }
+        if let at = channel.authenticatedAt { events.append(DiagnosticEvent(at: at, message: "SSH authentication confirmed by the verified callback.")) }
         diagnostics.append(DiagnosticEntry(
             at: Date(),
             connectionID: connection.id,
@@ -532,7 +715,8 @@ final class SSHSessionManager {
             mode: mode.title,
             result: result,
             channel: channel.summary,
-            output: output))
+            output: output,
+            events: events.sorted { $0.at < $1.at }))
 
         // Drop the oldest attempts for this machine first, then the oldest
         // overall, so one busy host cannot erase every other machine's history.
@@ -547,7 +731,7 @@ final class SSHSessionManager {
     }
 
     private enum AttemptOutcome: Equatable {
-        case stillWaiting, authenticated, exited, timedOut, cancelled
+        case stillWaiting, authenticated, exited, timedOut, cancelled, helperFailed
     }
 
     // MARK: - Live sessions
@@ -571,6 +755,17 @@ final class SSHSessionManager {
             terminate(attempt.process)
         }
         for id in Array(sessions.keys) { disconnect(id) }
+    }
+
+    /// Quitting ends this process before cancelled attempts unwind, so their
+    /// folders (socket, diagnostic FIFO, owner file; no secrets) go now rather
+    /// than waiting for the next launch's sweep, as locking already does.
+    func shutDownForTermination() {
+        disconnectAll()
+        for directory in attemptDirectories.values {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        attemptDirectories.removeAll()
     }
 
     /// Hands the already-authenticated session to Terminal. No password is
@@ -632,6 +827,14 @@ final class SSHSessionManager {
 
     // MARK: - Helpers
 
+    /// Distinct from Cancel: the person did not stop this.
+    static let helperFailure = SSHFailure(
+        kind: .helperFailed,
+        headline: "Password entry could not complete.",
+        guidance: "No password was sent. SSH-Wakey's password entry failed one of its own checks "
+            + "or quit unexpectedly. Try again. If it keeps happening, use Help > Save Diagnostics… to report it.",
+        detail: nil)
+
     static let cancelledFailure = SSHFailure(
         kind: .cancelled,
         headline: "Connection cancelled.",
@@ -689,18 +892,16 @@ final class SSHSessionManager {
         if let host, NetworkScope.isLocal(host),
            SSHFailure.localNetworkSuspects.contains(failure.kind) {
             failure.suggestsLocalNetworkPermission = true
-            notes.append("This address is on your own network, and macOS has to give SSH-Wakey "
-                + "permission to reach devices there. Without that permission every attempt fails "
-                + "exactly like this, whether or not the other machine is running. If the prompt "
-                + "was dismissed or refused, open Local Network settings below. If you have just "
-                + "allowed it, connect again.")
+            notes.append("If other devices on this network are also unreachable, check that macOS "
+                + "has given SSH-Wakey Local Network permission. This error alone does not show "
+                + "whether permission is missing.")
         }
 
         if outcome.repeatedPrompts > 0 {
             notes.append("ssh asked for the password again after it had already been given once. "
                 + "SSH-Wakey answers a single password prompt per attempt and left the rest "
-                + "unanswered, because repeating a password that has just been rejected only "
-                + "produces more failed logins. Press Connect to try again.")
+                + "unanswered. A repeated prompt alone does not prove the password was rejected; "
+                + "FileVault can close SSH while the Mac finishes starting. The password was not resent.")
         }
         for prompt in outcome.refusedPrompts where !prompt.isEmpty {
             notes.append("This prompt went unanswered because it is not a password prompt: \(prompt)")
@@ -818,15 +1019,13 @@ final class OutputCollector: @unchecked Sendable {
     }
     func reset() {
         lock.lock(); defer { lock.unlock() }
-        data.resetBytes(in: 0..<data.count)
-        data.removeAll(keepingCapacity: false)
+        VaultCrypto.erase(&data)
         overflow = false; total = 0; discarding = false
     }
     func suppressStorage() {
         lock.lock(); defer { lock.unlock() }
         discarding = true
-        data.resetBytes(in: 0..<data.count)
-        data.removeAll(keepingCapacity: false)
+        VaultCrypto.erase(&data)
     }
     var exceededLimit: Bool { lock.lock(); defer { lock.unlock() }; return overflow }
     var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }

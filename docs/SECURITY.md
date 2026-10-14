@@ -34,15 +34,26 @@ server remains outside this protection.
    service pins its caller through XPC and independently verifies the main-app
    socket peer's kernel audit token and signed Info.plist. Read-only handles to
    the fixed enclosing executables allow identity checks without granting folder
-   access. A second XPC message is required after the caller requirement is set.
-   Only the sandboxed service shows an `NSSecureTextField` with the destination supplied by the app. It uses
+   access. To extract the signed CodeDirectory hash through Apple's Security API,
+   the service copies bounded public executable bytes from those handles into a
+   private directory under its own sandbox temporary directory. It removes the
+   copies before returning from hash extraction, before any password entry.
+   Extracting the hash does not validate a signature: XPC and the socket
+   audit-token checks still authenticate the running peers. A second XPC message
+   is required after the caller requirement is set.
+   The SSH password field is an `NSSecureTextField` shown only by the sandboxed
+   service, with the destination supplied by the app. It uses
    secure event input while active and closes on cancellation, parent loss,
    main-app exit or expiration. A server prompt does not supply the displayed destination.
 6. On submission, a scoped AppKit-to-Swift `String` bridge copies UTF-8 directly
    into a page-aligned `mmap` allocation. `mlock` must succeed. The helper refuses
    empty answers, NUL/newline characters and answers exceeding 1,022 UTF-8 bytes,
    avoiding askpass line injection and OpenSSH reader truncation.
-7. Authorization is checked again. The helper writes directly from that buffer
+7. Authorization is checked again. The app's check that the service, not the
+   adapter, now holds the channel relies on Darwin's `LOCAL_PEERPID` and
+   `LOCAL_PEERTOKEN` reporting the process that most recently operated on the
+   peer socket. The adapter performs no socket operation after handing off. The
+   app sends its go-ahead only then. The helper writes directly from that buffer
    to SSH's stdout pipe, wipes its complete allocation with `memset_s`, unmaps
    it, writes the newline separately, and exits. No appended password `Data` or
    byte-array copy is constructed. Status messages contain no secret bytes.
@@ -50,13 +61,18 @@ server remains outside this protection.
    Attempts are bounded and cancellation closes the authorization channel.
 
 The app, adapter and password service disable core dumps. SSH inherits that
-restriction. The password service has only the `com.apple.security.app-sandbox`
+restriction. Disabling core dumps does not stop macOS crash reports (`.ips`
+files); those record backtraces and thread register state, not memory contents.
+Locked password buffers are also marked so the kernel zeroes them if the service
+dies before its own wipe. The password service has only the `com.apple.security.app-sandbox`
 entitlement, with no network, file, group, inheritance or temporary exceptions.
 It refuses startup if its entitlement set differs. It cannot open new network
 connections or arbitrary user files. Standard App Sandbox still permits its own
 container and system/framework resources. This is containment, not a guarantee
 that a compromised helper could never persist data anywhere. No user-data
 bookmarks or filesystem sandbox extensions are passed to it.
+A crash during code-hash extraction can leave a temporary copy of public
+executable bytes. Those copies contain no password or connection data.
 
 The main app and adapter never receive password bytes through XPC or their
 private authorization socket. XPC replies carry only success/failure. The service
@@ -75,7 +91,10 @@ Swift string and AppKit's copies cannot be reliably overwritten. Process
 isolation confines those input copies to a helper that exits after the attempt;
 it does not prove physical erasure or prevent framework-managed pages from
 being paged out. Only the explicitly locked buffer has that guarantee while
-locked. OpenSSH must also hold the password to perform password authentication.
+locked. `mlock` keeps it out of swap, not out of the hibernation (safe sleep)
+image, which can hold all of memory. That image is on the separate VM volume,
+which macOS does not list as a FileVault volume, so do not assume FileVault
+covers it. OpenSSH must also hold the password to perform password authentication.
 
 The recovery passphrase is a separate secret used by the main app's vault. Its
 native fields avoid SwiftUI string bindings, but submission still crosses scoped
@@ -83,6 +102,23 @@ String and CryptoKit/CommonCrypto boundaries. Owned derivation buffers are
 locked and wiped; framework copies and `SymmetricKey` internals are outside the
 app's erase control. Decrypted connection metadata is intentionally retained
 while the file is open so it can be displayed and edited.
+
+Secrets are deliberately not encrypted in memory. The wrapping key would have to
+live in the same process, so anything able to read a password, passphrase or
+vault key there could read that key too; it adds nothing against this threat
+model. The design shortens how long secrets exist instead. The password lives in
+a helper that exits after one attempt, and owned derivation and key buffers are
+wiped as soon as they have been used.
+
+Passphrases are normalized to Unicode NFC before key derivation, so the same
+accented text typed precomposed or decomposed opens the vault. Vaults sealed
+before normalization still open: the opener also tries the phrase as typed and
+decomposed, at one derivation each, only when those spellings differ.
+
+ssh offers keys from your SSH agent (the app passes `SSH_AUTH_SOCK` through) and
+its default identity files before it falls back to a password. The
+`IdentitiesOnly` extra option stops it offering agent keys beyond those files or
+ones named with `-i`.
 
 For a design that avoids sending an account password, use SSH key authentication
 with a suitable agent or hardware-backed signer. That requires support from the
@@ -100,8 +136,17 @@ when the separate connection list is encrypted. Existing entries in
 that disabled strict checking are normalized to strict checking.
 
 Enrollment fetches exactly one Ed25519 key, validates its SSH wire format and
-computes SHA-256 in process. The user must enter the fingerprint obtained through
-an independent trusted route, such as a terminal on the target Mac:
+computes SHA-256 in process. On the selected connection's first unknown-host
+failure, an approval sheet opens automatically and displays the destination host,
+port, username and fingerprint. **Trust & Connect** (or **Trust & Wake**) requires
+explicit approval before saving that scanned key and retrying with strict host-key
+checking. It does not automatically trust a new host.
+
+First-use approval relies on the user recognizing the expected destination and
+trusting the network. For stronger identity confirmation, **Verify fingerprint
+first** requires a nonempty fingerprint that exactly matches the scanned key.
+Obtain that fingerprint through an independent trusted route, such as a terminal
+on the target Mac:
 
 ```sh
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
@@ -162,8 +207,9 @@ fields; it does not encrypt metadata or remove it from memory.
 
 For encrypted stores, revealing a row or opening its Edit or Activity view
 requires Touch ID or the Mac login password. This grants a non-renewing display
-lease of at most one minute. App deactivation, vault lock and expiry hide the
-details and close those views. The authentication prompt itself may temporarily
+lease of at most one minute, measured with a clock that keeps running during
+sleep. App deactivation, sleep, screen lock, user switching, vault lock and
+expiry hide the details and close those views, with or without App Lock. The authentication prompt itself may temporarily
 deactivate the app without cancelling its own challenge. This is an application
 display control over already-open metadata, not a separate encryption layer.
 
@@ -183,8 +229,14 @@ the login Keychain by default, or user-presence-protected Secure Enclave key
 agreement when App Lock is enabled. New vaults use
 600,000 rounds and a 16-byte salt. Readers validate formats, cipher/derivation
 identifiers, salt/key sizes and bounded work factors before derivation. A damaged
-slot does not prevent using an intact other slot. Owned plaintext serialization,
-unwrapped-key and derivation buffers are cleared when finished.
+slot does not prevent using an intact other slot. Owned plaintext serialized for
+sealing or export, unwrapped-key and derivation buffers are cleared with
+`memset_s` when finished. The plain-text file written when encryption is off is
+not, since those bytes go to disk unencrypted anyway. Checking a recovery
+passphrase compares its unwrapped key with the key already open in constant time
+instead of decrypting the connection list again. Recovery unlock upgrades a
+pre-1.3 (format 1) vault to the current format and rotates its data key; a vault
+from a newer version is reported as needing an update, not as damaged.
 
 Changing the recovery passphrase rotates the data key, re-encrypts the payload
 and rebuilds both slots. A copied old vault plus its old passphrase does not
@@ -219,6 +271,10 @@ This removes current app data; it does not securely erase historical copies.
 Exports are explicitly plaintext. Recovery passphrase Copy deliberately puts a
 secret on the clipboard. Concealed/transient/local-only pasteboard hints and
 conditional expiry are mitigations, not access controls against another app.
+The copy is cleared after 90 seconds of wall-clock time (the timer keeps
+counting through sleep), when SSH-Wakey quits, and on sleep, screen lock or user
+switching, each time only if the clipboard still holds that copy. A crash or
+Force Quit skips the quit-time clear and leaves the phrase on the clipboard.
 Manual exports, old files, backups, APFS snapshots and previously existing
 plaintext copies cannot be securely erased retroactively by this app.
 
@@ -252,6 +308,15 @@ and connection model until five minutes without input delivered to SSH-Wakey,
 or until screen lock, sleep, user switching or manual locking. Activity in
 Terminal or another app does not renew the lease. A monotonic clock that includes
 sleep measures the deadline; a late input event cannot renew an expired lease.
+A manual screen lock with the display awake produces only the
+`com.apple.screenIsLocked` distributed notification. The app registers it for
+immediate delivery so it arrives while SSH-Wakey is in the background.
+
+With App Lock off, the same sleep, screen-lock and user-switch events still
+revoke a detail lease, clear a copied recovery phrase and empty an open
+passphrase sheet, which then asks for the phrase again. The vault stays open.
+Merely switching to another app keeps the sheet's fields, so a generated phrase
+survives a trip to Passwords to save it.
 
 Locking revokes session access before releasing the vault state, cancels pending
 authentication and SSH attempts, disconnects masters, dismisses editors, removes
@@ -286,14 +351,19 @@ exist in ordinary process memory while in use.
 
 Release and ManagedRelease enable Hardened Runtime and exclude debug attachment
 and code-loading exception entitlements. Both helpers use Hardened Runtime and
-exclude debugger entitlements even in Debug. Main-app Debug builds permit debugging and must
-not be treated as equivalent protection. The install/package scripts verify the
-signature, runtime flag and entitlements of all three executables before accepting a build; a failed
-verification stops them.
+exclude debugger entitlements even in Debug. The main app's Debug and
+ManagedDebug configurations turn Hardened Runtime off and permit debugging; they
+must not be treated as equivalent protection. The install/package scripts verify
+the signature and runtime flag of all three executables before accepting a build.
+The app and adapter must carry no entitlements at all, and the password service
+exactly the App Sandbox entitlement; a failed verification stops them.
+
+Release disk images contain the staged app and an Applications link. Packaging
+reconstructs file bytes and permissions, clears generated Finder metadata, and
+mounts each image read-only to repeat signature, entitlement, and privacy checks.
 
 Release ZIP entries contain explicit file bytes and fixed permissions/timestamps,
-without extended attributes or ACLs. Legacy local DMGs can retain macOS
-provenance and are not used as release assets. The ad-hoc packaging path
+without extended attributes or ACLs. The ad-hoc packaging path
 strips debug symbols containing local source paths and removes optional
 build-machine/toolchain keys from Info.plist. It then re-signs the password
 service, adapter, and app in that order and repeats the security checks. A

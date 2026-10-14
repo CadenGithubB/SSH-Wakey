@@ -159,9 +159,22 @@ struct ContentView: View {
         .onChange(of: security.detailReveal.isAuthorized) { _, authorized in
             if !authorized { hideAuthorizedDetails() }
         }
+        .onChange(of: sessions.states) { previous, current in
+            // First-time trust is part of connecting. Only open for the selected
+            // attempt that just finished; changing selection or cancelling the
+            // sheet must not immediately present it again.
+            guard sheet == nil, let connection = selectedConnection,
+                  previous[connection.id]?.isConnecting == true,
+                  case .failed(let failure) = current[connection.id],
+                  failure.offersHostKeyReview, authorizeAction() else { return }
+            sheet = .hostKey(connection.id)
+        }
         .onChange(of: columns) { _, layout in saveColumnLayout(layout) }
         .onReceive(NotificationCenter.default.publisher(for: .showWakeyHelp)) { _ in
             sheet = .help
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .wakeyDidSuspend)) { _ in
+            revokeDetailPresentation()
         }
         .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in
             accessGeneration = UUID()
@@ -517,9 +530,6 @@ struct ContentView: View {
             requestToggleReveal(connection.id, generation: generation)
         }
         .frame(width: 20, height: 20)
-        .help(shown
-              ? "Hide this connection's username, address and dates"
-              : "Show this one, and hide whichever is showing now")
         .accessibilityLabel(shown ? "Hide details" : "Show details")
     }
 
@@ -659,7 +669,7 @@ struct ContentView: View {
                     .keyboardShortcut(.defaultAction)
                 }
 
-            case .idle, .failed, .unlocked:
+            case .idle, .failed, .unlocked, .wakeResult:
                 if !store.isManagedBuild {
                     Picker("Connect mode", selection: connectModeBinding) {
                         ForEach(ConnectMode.allCases) { mode in
@@ -730,6 +740,7 @@ struct ContentView: View {
             if let connection = store.connection(with: id) {
                 HostKeyApprovalView(
                     connection: connection,
+                    mode: store.isManagedBuild ? .unlock : connection.connectMode,
                     authorize: { authorizeAction(generation: generation) },
                     onTrusted: {
                         guard authorizeAction(generation: generation) else { return }
@@ -740,10 +751,13 @@ struct ContentView: View {
                             try? await Task.sleep(nanoseconds: 350_000_000)
                             guard generation == accessGeneration,
                                   let saved = store.connection(with: id) else { return }
-                            startConnection(saved)
+                            startConnection(saved, continuingTrust: true)
                         }
                     },
-                    onCancel: { sheet = nil })
+                    onCancel: {
+                        sessions.discardHostTrustContinuation(id)
+                        sheet = nil
+                    })
             }
 
         case .activity(let id):
@@ -787,9 +801,10 @@ struct ContentView: View {
             })
     }
 
-    private func startConnection(_ connection: SSHConnection) {
+    private func startConnection(_ connection: SSHConnection, continuingTrust: Bool = false) {
         guard authorizeAction(), let current = store.connection(with: connection.id) else { return }
-        sessions.connect(current, mode: store.isManagedBuild ? .unlock : current.connectMode)
+        sessions.connect(current, mode: store.isManagedBuild ? .unlock : current.connectMode,
+                         continuingTrust: continuingTrust)
     }
 
     /// Connect, or open a terminal when the session is already up.
@@ -801,7 +816,7 @@ struct ContentView: View {
             sessions.openInTerminal(connection.id)
         case .connecting:
             break
-        case .idle, .failed, .unlocked:
+        case .idle, .failed, .unlocked, .wakeResult:
             startConnection(current)
         }
     }
@@ -952,6 +967,7 @@ struct StatusDot: View {
         case .connecting: return .yellow
         case .connected: return .green
         case .unlocked: return .blue
+        case .wakeResult(let result): return result.desktopReady ? .green : .blue
         case .failed(let failure): return failure.kind == .cancelled ? .secondary.opacity(0.25) : .red
         }
     }
@@ -962,6 +978,7 @@ struct StatusDot: View {
         case .connecting(let stage): return stage
         case .connected: return "Connected"
         case .unlocked: return "Logged in, then closed"
+        case .wakeResult(let result): return result.headline
         case .failed(let failure): return failure.headline
         }
     }
@@ -988,6 +1005,10 @@ private struct RevealToggleControl: NSViewRepresentable {
         button.setButtonType(.momentaryChange)
         button.target = context.coordinator
         button.action = #selector(Coordinator.clicked)
+        // One tooltip, set once. Changing it while it is on screen (the state
+        // flips as you click) left AppKit's tooltip window stuck open.
+        button.toolTip = "Show or hide this connection's username, address and dates. "
+            + "Only one connection's details show at a time."
         applyAppearance(to: button)
         return button
     }
@@ -1003,9 +1024,6 @@ private struct RevealToggleControl: NSViewRepresentable {
         button.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(config)
         button.contentTintColor = isRevealed ? .controlAccentColor : .secondaryLabelColor
-        button.toolTip = isRevealed
-            ? "Hide this connection's username, address and dates"
-            : "Show this one, and hide whichever is showing now"
     }
 
     final class Coordinator: NSObject {

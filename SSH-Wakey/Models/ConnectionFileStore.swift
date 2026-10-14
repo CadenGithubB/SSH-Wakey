@@ -428,6 +428,10 @@ struct ConnectionFileStore: Sendable {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             document = try decoder.decode(Document.self, from: data)
+        } catch let error as VaultError {
+            // A vault from a newer app is not damage. Say to update instead.
+            if case .unsupportedFormat = error { throw error }
+            throw StoreError.damagedOrAltered(error.localizedDescription)
         } catch {
             throw StoreError.damagedOrAltered(error.localizedDescription)
         }

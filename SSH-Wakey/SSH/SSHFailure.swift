@@ -19,6 +19,7 @@ struct SSHFailure: Equatable, Sendable {
         case cancelled
         case launchFailed
         case askpassRefused
+        case helperFailed
         case unknown
     }
 
@@ -79,8 +80,8 @@ enum SSHOutputClassifier {
             || lowered.contains("no ecdsa host key is known") {
             return SSHFailure(
                 kind: .hostKeyUnknown,
-                headline: "This host is not in your known_hosts file.",
-                guidance: "Review the server's key fingerprint and add it before connecting.",
+                headline: "Ready to trust this Mac?",
+                guidance: "Confirm this destination to continue. You can also verify its fingerprint first.",
                 detail: trimmedDetail)
         }
 

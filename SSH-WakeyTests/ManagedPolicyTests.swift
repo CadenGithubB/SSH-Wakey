@@ -114,7 +114,7 @@ final class ManagedPolicyTests: XCTestCase {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("docs/jamf/example-managed.plist")
+            .appendingPathComponent("docs/JamfDocs/example-managed.plist")
         let data = try Data(contentsOf: url)
         let raw = try PropertyListSerialization.propertyList(from: data, format: nil)
         guard let plist = raw as? [String: Any] else {

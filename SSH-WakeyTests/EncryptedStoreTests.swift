@@ -1020,6 +1020,84 @@ final class EncryptedStoreTests: XCTestCase {
         XCTAssertFalse(makeStore().isLocked)
     }
 
+    func testTogglingAppLockKeepsRecoverySaltAndRoundsButRotatesTheDataKey() async throws {
+        try store.enableEncryption(passphrase: passphrase)
+        let original = try storedVault()
+        let originalKey = try VaultCrypto.dataKey(from: original, passphrase: passphrase)
+
+        try await store.enableAppLock(store.prepareEnableAppLock(passphrase: passphrase))
+        let enabled = try storedVault()
+        XCTAssertEqual(enabled.passphraseSlot.salt, original.passphraseSlot.salt)
+        XCTAssertEqual(enabled.passphraseSlot.rounds, original.passphraseSlot.rounds)
+        let enabledKey = try VaultCrypto.dataKey(from: enabled, passphrase: passphrase)
+        XCTAssertEqual(try VaultCrypto.connections(in: enabled, using: enabledKey).count, 1)
+        XCTAssertThrowsError(try VaultCrypto.connections(in: enabled, using: originalKey),
+                             "a pre-toggle copy must not decrypt what is saved afterwards")
+
+        try await store.disableAppLock(store.prepareDisableAppLock(passphrase: passphrase))
+        let disabled = try storedVault()
+        XCTAssertEqual(disabled.passphraseSlot.salt, original.passphraseSlot.salt)
+        XCTAssertEqual(disabled.passphraseSlot.rounds, original.passphraseSlot.rounds)
+        XCTAssertNoThrow(try VaultCrypto.verifyPassphrase(in: disabled, passphrase: passphrase))
+        XCTAssertThrowsError(try VaultCrypto.connections(in: disabled, using: enabledKey))
+        XCTAssertThrowsError(try VaultCrypto.connections(in: disabled, using: originalKey))
+    }
+
+    // MARK: - Format upgrades
+
+    /// A synthetic pre-1.3 vault: no associated data on any box, and a
+    /// Keychain wrapper for a key that is not in the Keychain.
+    private func plantFormatOneVault(_ rows: [SSHConnection], dataKey: SymmetricKey) throws {
+        let salt = VaultCrypto.randomBytes(ConnectionVault.saltSize)
+        let rounds = ConnectionVault.minimumRounds
+        let recovery = try VaultCrypto.derive(passphrase, salt: salt, rounds: rounds)
+        let legacy = ConnectionVault(
+            format: 1, cipher: ConnectionVault.cipherName,
+            payload: try XCTUnwrap(AES.GCM.seal(VaultCrypto.encoder().encode(rows), using: dataKey).combined),
+            keychainWrappedKey: try dataKey.withUnsafeBytes {
+                try XCTUnwrap(AES.GCM.seal($0, using: VaultCrypto.makeDataKey()).combined)
+            },
+            passphraseSlot: .init(
+                derivation: ConnectionVault.derivationName, salt: salt, rounds: rounds,
+                wrappedKey: try dataKey.withUnsafeBytes { try XCTUnwrap(AES.GCM.seal($0, using: recovery).combined) }))
+        _ = try ConnectionFileStore(directoryURL: directory).save(legacy)
+    }
+
+    func testRecoveryUnlockUpgradesAFormatOneVaultAndRotatesItsKey() throws {
+        let legacyKey = VaultCrypto.makeDataKey()
+        try plantFormatOneVault([SSHConnection(name: "Legacy Mac", username: "audit", host: "legacy.invalid")],
+                                dataKey: legacyKey)
+        let reopened = makeStore()
+        XCTAssertTrue(reopened.isLocked)
+
+        try reopened.unlock(withPassphrase: passphrase)
+
+        XCTAssertEqual(reopened.connections.map(\.name), ["Legacy Mac"])
+        let upgraded = try storedVault()
+        XCTAssertEqual(upgraded.format, ConnectionVault.currentFormat)
+        let recovered = try VaultCrypto.dataKey(from: upgraded, passphrase: passphrase)
+        XCTAssertEqual(try VaultCrypto.connections(in: upgraded, using: recovered).map(\.name), ["Legacy Mac"])
+        let keychainKey = try XCTUnwrap(KeychainKeyStore.load(account: account))
+        let opened = try VaultCrypto.dataKey(from: upgraded, keychainKey: keychainKey)
+        XCTAssertEqual(try VaultCrypto.connections(in: upgraded, using: opened).map(\.name), ["Legacy Mac"])
+        XCTAssertThrowsError(try VaultCrypto.connections(in: upgraded, using: legacyKey))
+        XCTAssertFalse(makeStore().isLocked)
+    }
+
+    func testAVaultFromANewerAppIsUnavailableAndSaysTheAppIsTooOld() throws {
+        try store.enableEncryption(passphrase: passphrase)
+        var document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: connectionsFile)) as? [String: Any])
+        var vault = try XCTUnwrap(document["vault"] as? [String: Any])
+        vault["format"] = ConnectionVault.currentFormat + 1
+        vault["keyProtection"] = ["kind": "a-future-protection-kind"]
+        document["vault"] = vault
+        let reopened = try reopenAfterPlanting(JSONSerialization.data(withJSONObject: document))
+
+        XCTAssertTrue(reopened.isUnavailable)
+        let warning = try XCTUnwrap(reopened.storageError)
+        XCTAssertTrue(warning.localizedCaseInsensitiveContains("too old"), warning)
+        XCTAssertFalse(warning.localizedCaseInsensitiveContains("damaged or altered"), warning)
+    }
 }
 
 /// Returns only synthetic keys. A paused request deliberately returns success

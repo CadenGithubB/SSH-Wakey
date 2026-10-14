@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Network
 
 /// Out-of-band poke for a sleeping Mac, then SSH can talk to it.
 ///
@@ -269,5 +270,136 @@ enum NetworkWake {
                 }
             }
         }
+    }
+}
+
+
+/// Prefers a valid Screen Sharing greeting. SSH reachability is retained only
+/// as a fallback when Screen Sharing has not appeared before the deadline.
+/// No credentials or client application bytes are sent.
+enum WakeReadiness {
+    static func check(
+        host: String, sshPort: Int,
+        now: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        pause: @Sendable () async throws -> Void = { try await Task.sleep(nanoseconds: 2_000_000_000) },
+        probe: @escaping @Sendable (String, Int, TimeInterval) async -> Bool = { host, port, timeout in
+            await TCPReadinessProbe(host: host, port: port, requiresScreenSharing: port == 5900).run(timeout: timeout)
+        }
+    ) async -> Int? {
+        let deadline = now() + 45
+        let ports = sshPort == 5900 ? [sshPort] : [sshPort, 5900]
+        var sshAnswered: Int?
+        // The round limit also bounds work if a supplied clock stops advancing.
+        for _ in 0..<23 {
+            guard !Task.isCancelled else { return nil }
+            let remaining = deadline - now()
+            guard remaining > 0 else { return sshAnswered }
+            let found = await withTaskGroup(of: Int?.self) { group -> Int? in
+                for port in ports {
+                    group.addTask {
+                        guard !Task.isCancelled else { return nil }
+                        return await probe(host, port, min(2, remaining)) ? port : nil
+                    }
+                }
+                var sshPort: Int?
+                for await port in group {
+                    if port == 5900 { group.cancelAll(); return port }
+                    if let port { sshPort = port }
+                }
+                return sshPort
+            }
+            guard !Task.isCancelled else { return nil }
+            if found == 5900 { return found }
+            if let found { sshAnswered = found }
+            // Reserve the pause within the overall time budget.
+            guard deadline - now() > 2 else { return sshAnswered }
+            do { try await pause() } catch { return nil }
+        }
+        return sshAnswered
+    }
+
+    static func screenSharingAvailable(host: String) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        return await TCPReadinessProbe(host: host, port: 5900, requiresScreenSharing: true).run(timeout: 1)
+    }
+
+    /// RFC 6143 section 7.1.1: exactly 12 ASCII bytes. Accept vendor minor
+    /// versions too. The greeting identifies a service, not a trusted host.
+    static func isScreenSharingGreeting(_ data: Data) -> Bool {
+        let bytes = Array(data)
+        return bytes.count == 12 && Array(bytes[0..<4]) == Array("RFB ".utf8)
+            && bytes[7] == 46 && bytes[11] == 10
+            && [4, 5, 6, 8, 9, 10].allSatisfy { (48...57).contains(bytes[$0]) }
+            && bytes[4...6].contains { $0 != 48 }
+    }
+}
+
+/// All mutable state lives on this queue, including cancellation before start.
+final class TCPReadinessProbe: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "SSH-Wakey.readiness")
+    private let connection: NWConnection?
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var finished = false
+    private let requiresScreenSharing: Bool
+    private var greeting = Data()
+
+    init(host: String, port: Int, requiresScreenSharing: Bool = false) {
+        self.requiresScreenSharing = requiresScreenSharing
+        if let value = UInt16(exactly: port), let endpoint = NWEndpoint.Port(rawValue: value) {
+            connection = NWConnection(host: NWEndpoint.Host(host), port: endpoint, using: .tcp)
+        } else {
+            connection = nil
+        }
+    }
+
+    func run(timeout: TimeInterval) async -> Bool {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                queue.async {
+                    guard !self.finished else { continuation.resume(returning: false); return }
+                    self.continuation = continuation
+                    guard let connection = self.connection else { self.finish(false); return }
+                    connection.stateUpdateHandler = { state in
+                        switch state {
+                        case .ready:
+                            if self.requiresScreenSharing { self.receiveGreeting() }
+                            else { self.finish(true) }
+                        case .failed, .cancelled: self.finish(false)
+                        default: break
+                        }
+                    }
+                    connection.start(queue: self.queue)
+                    self.queue.asyncAfter(deadline: .now() + timeout) { self.finish(false) }
+                }
+            }
+        } onCancel: {
+            self.queue.async { self.finish(false) }
+        }
+    }
+
+    private func receiveGreeting() {
+        guard !finished, let connection else { return }
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 12 - greeting.count) {
+            data, _, complete, error in
+            guard !self.finished else { return }
+            if let data { self.greeting.append(data) }
+            if self.greeting.count == 12 {
+                self.finish(WakeReadiness.isScreenSharingGreeting(self.greeting))
+            } else if complete || error != nil {
+                self.finish(false)
+            } else {
+                self.receiveGreeting()
+            }
+        }
+    }
+
+    private func finish(_ reachable: Bool) {
+        guard !finished else { return }
+        finished = true
+        greeting.removeAll()
+        connection?.stateUpdateHandler = nil
+        connection?.cancel()
+        continuation?.resume(returning: reachable)
+        continuation = nil
     }
 }

@@ -6,6 +6,8 @@ import Foundation
     func collect(_ channel: FileHandle, output: FileHandle, appCode: FileHandle,
                  appInfo: Data, grant: String, reply: @escaping (Bool) -> Void)
     #if DEBUG
+    func deliverSynthetic(_ channel: FileHandle, output: FileHandle, appCode: FileHandle,
+                          appInfo: Data, grant: String, reply: @escaping (Bool) -> Void)
     func probe(_ channel: FileHandle, output: FileHandle, appCode: FileHandle,
                appInfo: Data, grant: String, fixture: String, reply: @escaping (String) -> Void)
     #endif

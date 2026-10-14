@@ -22,8 +22,8 @@ check_installed_identity() {
 check_installed_identity
 
 echo 'Building Release…'
-/usr/bin/xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey \
-    -configuration Release -derivedDataPath build build >/dev/null
+/usr/bin/xcodebuild -quiet -project SSH-Wakey.xcodeproj -scheme SSH-Wakey \
+    -configuration Release -derivedDataPath build build
 BUILT=build/Build/Products/Release/SSH-Wakey.app
 verify_release_bundle "$BUILT" "$BUNDLE_ID" SSH-Wakey
 

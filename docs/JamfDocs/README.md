@@ -19,8 +19,9 @@ Build the Managed app from this repo:
 xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configuration ManagedRelease -derivedDataPath build build
 ```
 
-The product is `SSH-Wakey Managed.app`. `./Scripts/make-zip-managed.sh` creates
-`build/SSH-Wakey-Managed.zip`, also available from GitHub releases. These are
+The product is `SSH-Wakey Managed.app`. `./Scripts/make-dmg.sh --managed` creates
+`build/SSH-Wakey-Managed.dmg`; `./Scripts/make-zip.sh --managed` creates
+`build/SSH-Wakey-Managed.zip`. Both are available from GitHub releases. These are
 ad-hoc-signed verification builds. Before deploying through Jamf, sign all
 components with Developer ID, notarise the result, and test installation and
 password entry on the supported target Macs.

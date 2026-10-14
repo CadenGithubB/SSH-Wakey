@@ -52,6 +52,13 @@ verify_signed_component() {
                 || fail "Cannot parse password helper entitlements."
             [ "$sandbox_json" = '{"com.apple.security.app-sandbox":true}' ] \
                 || fail "Password helper must have only the App Sandbox entitlement."
+        elif [ -n "$release_entitlements" ]; then
+            # The app and askpass adapter carry no entitlements at all, so any
+            # entitlement is refused, including ones the list above misses.
+            other_json=$(printf '%s' "$release_entitlements" | /usr/bin/plutil -convert json -o - -- -) \
+                || fail "Cannot parse entitlements for $release_architecture."
+            [ "$other_json" = '{}' ] \
+                || fail "Unexpected entitlement found for $release_architecture."
         fi
     done
 }

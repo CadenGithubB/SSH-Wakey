@@ -115,25 +115,6 @@ final class ConnectionVaultTests: XCTestCase {
 
     // MARK: - Changing the keys
 
-    func testThePassphraseCanBeChangedWithoutReEncryptingTheFile() throws {
-        let keychainKey = KeychainKeyStore.makeKey()
-        let vault = try makeVault(keychainKey: keychainKey)
-        let dataKey = try VaultCrypto.dataKey(from: vault, keychainKey: keychainKey)
-
-        let updated = try VaultCrypto.replacingPassphrase(
-            in: vault, dataKey: dataKey, with: "a-brand-new-passphrase", rounds: testRounds)
-
-        XCTAssertEqual(updated.payload, vault.payload, "the contents are not re-encrypted")
-        XCTAssertEqual(try VaultCrypto.connections(
-            in: updated,
-            using: try VaultCrypto.dataKey(from: updated, passphrase: "a-brand-new-passphrase")),
-            connections)
-        XCTAssertThrowsError(try VaultCrypto.dataKey(from: updated, passphrase: passphrase),
-                             "the old passphrase must stop working")
-        XCTAssertNoThrow(try VaultCrypto.dataKey(from: updated, keychainKey: keychainKey),
-                         "the Keychain slot is untouched")
-    }
-
     func testANewKeychainKeyCanBeAdoptedAfterRecovery() throws {
         let vault = try makeVault()
         let dataKey = try VaultCrypto.dataKey(from: vault, passphrase: passphrase)
@@ -451,4 +432,86 @@ final class ConnectionVaultTests: XCTestCase {
         XCTAssertEqual(try VaultCrypto.connections(in: damaged, using: key), connections)
     }
 
+    func testAVaultFromANewerAppAsksForAnUpdateRatherThanLookingDamaged() throws {
+        let newer = ConnectionVault.currentFormat + 1
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(makeVault())) as? [String: Any])
+        json["format"] = newer
+        json["keyProtection"] = ["kind": "a-future-protection-kind"]
+        XCTAssertThrowsError(try JSONDecoder().decode(ConnectionVault.self, from: JSONSerialization.data(withJSONObject: json))) {
+            XCTAssertEqual($0 as? VaultError, .unsupportedFormat(newer))
+            XCTAssertEqual(($0 as? VaultError)?.suggestsIntegrityProblem, false)
+        }
+    }
+
+    // MARK: - Unicode spelling of the passphrase
+
+    /// One synthetic phrase with its accents precomposed (NFC) and decomposed
+    /// (NFD). Swift compares them equal, but their bytes differ.
+    private let precomposed = "cr\u{E8}me-br\u{FB}l\u{E9}e-synthetic"
+    private let decomposed = "cre\u{300}me-bru\u{302}le\u{301}e-synthetic"
+
+    func testTheTwoSpellingsDifferOnlyInTheirBytes() {
+        XCTAssertEqual(precomposed, decomposed)
+        XCTAssertFalse(precomposed.utf8.elementsEqual(decomposed.utf8))
+    }
+
+    func testEitherSpellingOpensAVaultSealedWithTheOther() throws {
+        for (sealedWith, openedWith) in [(decomposed, precomposed), (precomposed, decomposed)] {
+            let vault = try makeVault(passphrase: sealedWith)
+            let key = try VaultCrypto.dataKey(from: vault, passphrase: openedWith)
+            XCTAssertEqual(try VaultCrypto.connections(in: vault, using: key), connections)
+        }
+    }
+
+    /// Seals written before normalization derived from the bytes as typed.
+    func testAVaultSealedFromUnnormalizedBytesStillOpensInEitherSpelling() throws {
+        let old = try VaultCrypto.seal(
+            connections, dataKey: VaultCrypto.makeDataKey(), keychainKey: KeychainKeyStore.makeKey(),
+            passphrase: decomposed, rounds: testRounds, spelling: .asTyped)
+        for attempt in [decomposed, precomposed] {
+            let key = try VaultCrypto.dataKey(from: old, passphrase: attempt)
+            XCTAssertEqual(try VaultCrypto.connections(in: old, using: key), connections)
+        }
+        XCTAssertThrowsError(try VaultCrypto.dataKey(from: old, passphrase: "cr\u{E8}me-br\u{FB}l\u{E9}e-different")) {
+            XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
+        }
+    }
+
+    // MARK: - Checking a passphrase against the open data key
+
+    func testThePassphraseIsCheckedAgainstTheOpenDataKey() throws {
+        let dataKey = VaultCrypto.makeDataKey()
+        let vault = try makeVault(dataKey: dataKey)
+        XCTAssertNoThrow(try VaultCrypto.verifyPassphrase(in: vault, passphrase: passphrase, matches: dataKey))
+        XCTAssertThrowsError(try VaultCrypto.verifyPassphrase(in: vault, passphrase: "not-the-passphrase", matches: dataKey)) {
+            XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
+        }
+    }
+
+    func testARecoverySlotWrappingAnUnrelatedKeyIsRejected() throws {
+        let dataKey = VaultCrypto.makeDataKey()
+        var vault = try makeVault(dataKey: dataKey)
+        let chosen = "attacker-chosen-passphrase"
+        vault.passphraseSlot = try makeVault(passphrase: chosen).passphraseSlot
+        XCTAssertNoThrow(try VaultCrypto.dataKey(from: vault, passphrase: chosen), "the forged slot itself unwraps")
+        XCTAssertThrowsError(try VaultCrypto.verifyPassphrase(in: vault, passphrase: chosen, matches: dataKey)) {
+            XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
+        }
+    }
+
+    func testAVerifiedRecoveryKeyRewrapsANewDataKeyUnderTheSameSlotSettings() throws {
+        let dataKey = VaultCrypto.makeDataKey()
+        let vault = try makeVault(dataKey: dataKey)
+        let recoveryKey = try VaultCrypto.verifyPassphrase(in: vault, passphrase: passphrase, matches: dataKey)
+        let rotated = VaultCrypto.makeDataKey()
+
+        let resealed = try VaultCrypto.seal(
+            connections, dataKey: rotated, keychainKey: KeychainKeyStore.makeKey(), recoveryKey: recoveryKey,
+            salt: vault.passphraseSlot.salt, rounds: vault.passphraseSlot.rounds)
+
+        XCTAssertEqual(resealed.passphraseSlot.salt, vault.passphraseSlot.salt)
+        XCTAssertEqual(resealed.passphraseSlot.rounds, vault.passphraseSlot.rounds)
+        XCTAssertNoThrow(try VaultCrypto.verifyPassphrase(in: resealed, passphrase: passphrase, matches: rotated))
+        XCTAssertThrowsError(try VaultCrypto.connections(in: resealed, using: dataKey))
+    }
 }
