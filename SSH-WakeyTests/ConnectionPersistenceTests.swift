@@ -112,7 +112,23 @@ final class ConnectionPersistenceTests: XCTestCase {
 
         XCTAssertThrowsError(try store.load()) { error in
             XCTAssertEqual(error as? ConnectionFileStore.StoreError, .unsupportedVersion(99))
+            XCTAssertTrue(
+                (error as? LocalizedError)?.errorDescription?
+                    .localizedCaseInsensitiveContains("too old") == true,
+                String(describing: error))
         }
+    }
+
+    func testAnExistingEmptyFileIsRefusedAsDamaged() throws {
+        try store.createDirectoryIfNeeded()
+        try Data().write(to: store.fileURL)
+
+        XCTAssertThrowsError(try store.load()) { error in
+            guard case .damagedOrAltered = error as? ConnectionFileStore.StoreError else {
+                return XCTFail("Expected .damagedOrAltered, got \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: store.fileURL).count, 0)
     }
 
     func testCorruptFileReportsAReadableError() throws {

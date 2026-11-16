@@ -258,9 +258,6 @@ useful.
   it. Those copies are freed but not overwritten. The `SecureBuffer` shortens the
   window and guarantees the app's own copy is zeroed; it cannot undo what the
   framework already did.
-- **Memory is not locked.** There is no `mlock`, so in principle the page could
-  be written to swap. macOS encrypts swap by default, which mitigates but does
-  not eliminate this.
 - **Local root still sees everything.** The Hardened Runtime raises the bar for
   a process running as *you*, but root can still read memory, and root can read
   the socket. Nothing here defends against a fully compromised machine.
@@ -298,12 +295,28 @@ No shell is ever used to reach `ssh`. `Process.arguments` is an array, built by
 line. The extra-arguments field is tokenised by the app itself, which handles
 quotes and backslashes but expands nothing, so shell metacharacters are inert.
 
-Options that would give `ssh` a way to execute another program locally, or to
-read its trust data from somewhere else, are rejected before the command is
-built: `ProxyCommand`, `LocalCommand`, `PermitLocalCommand`, `KnownHostsCommand`,
-`PKCS11Provider`, `SecurityKeyProvider`, `Include`, `Match`,
-`UserKnownHostsFile`, `GlobalKnownHostsFile`, `XAuthLocation`. Flags the app sets
-itself are rejected too, so they cannot be overridden.
+The `-o KEYWORD=value` options that pass are an allow list, not a block list: a
+keyword is refused unless it is one of a fixed set that only tunes how the single
+connection is made. So an option that can run another program locally, load code
+into `ssh`, or move where `ssh` reads its trust from is refused by default —
+including a future one nobody has thought to name yet. `ProxyCommand`,
+`LocalCommand`, `PermitLocalCommand`, `KnownHostsCommand`, `PKCS11Provider`,
+`SecurityKeyProvider`, `Include`, `Match`, `UserKnownHostsFile`,
+`GlobalKnownHostsFile` and `XAuthLocation` are also named explicitly, so the
+refusal explains itself rather than just calling the option unknown.
+
+Two flags are refused for the same reasons. `-F` loads an alternate config file,
+which can carry any of the above. `-I` names a PKCS#11 shared library for `ssh`
+to load — the command-line twin of `PKCS11Provider`, and another way to run code
+inside the `ssh` process. Flags the app sets itself are rejected as well, so they
+cannot be overridden.
+
+SSH-Wakey also invokes `ssh` with `-F /dev/null`, supplies its own
+`UserKnownHostsFile`, and disables `GlobalKnownHostsFile`. The user's and
+system's SSH configuration files cannot add commands, redirects, forwarding,
+or another trust source to an SSH-Wakey connection. The ordinary identity-file
+defaults and an already-running `ssh-agent` remain available for key-based
+login.
 
 ### The one exception
 

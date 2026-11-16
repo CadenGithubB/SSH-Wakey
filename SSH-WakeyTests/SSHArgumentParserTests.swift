@@ -72,6 +72,13 @@ final class SSHArgumentParserTests: XCTestCase {
             "-o PKCS11Provider=/tmp/evil.dylib",
             "-o Match=exec",
             "-o Include=/tmp/other-config",
+            "-F /tmp/evil-config",
+            "-F/tmp/evil-config",
+            "-F",
+            "-vF /tmp/evil-config",
+            "-I /tmp/evil.dylib",
+            "-I/tmp/evil.dylib",
+            "-vI /tmp/evil.dylib",
         ] {
             XCTAssertThrowsError(try SSHArgumentParser.parse(text), text) { error in
                 guard case .dangerousOption = error as? SSHArgumentParser.ParseError else {
@@ -83,6 +90,28 @@ final class SSHArgumentParserTests: XCTestCase {
 
     func testTrustRedirectionIsRefused() {
         XCTAssertThrowsError(try SSHArgumentParser.parse("-o UserKnownHostsFile=/dev/null"))
+    }
+
+    /// The keyword check is an allow list. A perfectly real ssh option that is
+    /// not on it is refused, so an option nobody has vetted cannot ride along.
+    func testKeywordsOutsideTheAllowListAreRefused() {
+        for text in ["-o SetEnv=X=1", "-o RemoteCommand=/bin/sh", "-o EscapeChar=none"] {
+            XCTAssertThrowsError(try SSHArgumentParser.parse(text), text) { error in
+                guard case .unsupportedKeyword = error as? SSHArgumentParser.ParseError else {
+                    return XCTFail("Expected .unsupportedKeyword for \(text), got \(error)")
+                }
+            }
+        }
+    }
+
+    /// A safe, useful option on the allow list still passes.
+    func testAllowedKeywordsPass() throws {
+        XCTAssertEqual(
+            try SSHArgumentParser.parse("-o Ciphers=aes256-gcm@openssh.com"),
+            ["-o", "Ciphers=aes256-gcm@openssh.com"])
+        XCTAssertEqual(
+            try SSHArgumentParser.parse("-o IdentitiesOnly=yes"),
+            ["-o", "IdentitiesOnly=yes"])
     }
 
     func testOptionsTheAppSetsItselfAreRefused() {
@@ -97,6 +126,8 @@ final class SSHArgumentParserTests: XCTestCase {
             "-S /tmp/sock",
             "-N",
             "-f",
+            "-q",
+            "-o LogLevel=QUIET",
         ] {
             XCTAssertThrowsError(try SSHArgumentParser.parse(text), text) { error in
                 guard case .reservedOption = error as? SSHArgumentParser.ParseError else {
@@ -141,6 +172,7 @@ final class SSHArgumentParserTests: XCTestCase {
             .unterminatedQuote("'"), .trailingBackslash, .controlCharacter,
             .unexpectedOperand("x"), .missingValue("-o"), .unknownOption("-Z"),
             .reservedOption("-p"), .dangerousOption("-o proxycommand"),
+            .unsupportedKeyword("-o setenv"),
         ]
         for error in errors {
             XCTAssertFalse(error.errorDescription?.isEmpty ?? true, "\(error)")

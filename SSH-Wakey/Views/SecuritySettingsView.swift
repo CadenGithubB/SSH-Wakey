@@ -33,12 +33,19 @@ struct SecuritySettingsView: View {
                 Section {
                     LabeledContent("Saved connections") {
                     Label(
-                        store.isEncrypted ? "Encrypted on disk" : "Stored in plain text",
-                        systemImage: store.isEncrypted ? "lock.fill" : "doc.plaintext")
-                        .foregroundStyle(store.isEncrypted ? Color.green : Color.secondary)
+                        store.isUnavailable
+                            ? "Could not be opened"
+                            : (store.isEncrypted ? "Encrypted on disk" : "Stored in plain text"),
+                        systemImage: store.isUnavailable
+                            ? "exclamationmark.shield.fill"
+                            : (store.isEncrypted ? "lock.fill" : "doc.plaintext"))
+                        .foregroundStyle(
+                            store.isUnavailable
+                                ? Color.red
+                                : (store.isEncrypted ? Color.green : Color.secondary))
                 }
 
-                Text(store.isEncrypted ? Self.encryptedExplanation : Self.plainExplanation)
+                Text(storageExplanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -47,15 +54,16 @@ struct SecuritySettingsView: View {
             Section {
                 if store.isEncrypted {
                     Button("Change Recovery Passphrase…") { sheet = .change }
-                        .disabled(store.isLocked)
+                        .disabled(store.isLocked || store.isUnavailable)
                     Button("Turn Off Encryption…") { sheet = .disable }
-                        .disabled(store.isLocked)
+                        .disabled(store.isLocked || store.isUnavailable)
                 } else {
                     Button("Turn On Encryption…") { sheet = .create }
+                        .disabled(store.isUnavailable)
                 }
 
                 Button("Export a Readable Copy…", action: export)
-                    .disabled(store.isLocked)
+                    .disabled(store.isLocked || store.isUnavailable)
             } footer: {
                 Text("An export is an ordinary, unencrypted file. It is the copy to keep somewhere "
                      + "safe before you need it, and the one to keep out of shared folders.")
@@ -110,6 +118,14 @@ struct SecuritySettingsView: View {
                 },
                 onCancel: { sheet = nil })
         }
+    }
+
+    private var storageExplanation: String {
+        if store.isUnavailable {
+            return store.storageError
+                ?? "The saved connections file could not be opened. Do not add machines or turn on encryption until it can be read."
+        }
+        return store.isEncrypted ? Self.encryptedExplanation : Self.plainExplanation
     }
 
     private static let plainExplanation = """

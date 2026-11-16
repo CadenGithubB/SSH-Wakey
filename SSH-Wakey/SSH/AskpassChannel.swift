@@ -22,9 +22,9 @@ final class AskpassChannel: @unchecked Sendable {
         /// False when ssh authenticated without ever asking, usually because a
         /// key or an agent was accepted first.
         var served = false
-        /// ssh asked a question it had already been answered, or asked once too
-        /// many times. Answering the same prompt twice is a retry, which is the
-        /// thing this refuses to do.
+        /// ssh asked for the password again after it had already been served
+        /// once. Answering again would be a retry, which is the thing this
+        /// refuses to do, so the later prompt goes unanswered.
         var repeatedPrompts = 0
         /// Prompts that were not password prompts, so they went unanswered.
         var refusedPrompts: [String] = []
@@ -58,8 +58,9 @@ final class AskpassChannel: @unchecked Sendable {
     private let lock = NSLock()
 
     private var listenDescriptor: Int32 = -1
-    /// The prompts already answered, so none is ever answered twice.
-    private var answeredPrompts: Set<String> = []
+    /// Set once the password has been served, so it is served exactly once per
+    /// channel and every later prompt goes unanswered.
+    private var hasServed = false
     private var invalidated = false
     private var outcomeValue = Outcome()
 
@@ -240,22 +241,18 @@ final class AskpassChannel: @unchecked Sendable {
             return
         }
 
-        // Never answer the same question twice: that is what a retry is, and it
-        // is what turns one wrong password into a string of failed logins.
-        //
-        // Answering a *different* password prompt is not a retry. ssh offers
-        // the password to each authentication method the server advertises, so
-        // a machine whose keyboard-interactive path is unhappy will ask again
-        // under the plain password method, with different wording. Refusing
-        // that was refusing the login itself.
-        let question = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        // One password, one attempt. The password is served exactly once per
+        // channel. ssh asks again when a rejected password sends it on to the
+        // next authentication method; answering again would be a silent retry,
+        // turning one wrong password into a run of failed logins. So every
+        // prompt after the first goes unanswered, the failure message says it
+        // happened, and a fresh attempt uses a fresh channel.
         lock.lock()
-        let alreadyAnswered = answeredPrompts.contains(question)
-        let exhausted = answeredPrompts.count >= Self.maximumPrompts
-        if !alreadyAnswered && !exhausted { answeredPrompts.insert(question) }
+        let alreadyServed = hasServed
+        if !alreadyServed { hasServed = true }
         lock.unlock()
 
-        guard !alreadyAnswered, !exhausted else {
+        guard !alreadyServed else {
             record { $0.repeatedPrompts += 1 }
             return
         }
@@ -263,11 +260,6 @@ final class AskpassChannel: @unchecked Sendable {
         send(to: client)
         record { $0.served = true }
     }
-
-    /// A ceiling on how many different password prompts one attempt will
-    /// answer. Two is the normal maximum, one per authentication method that
-    /// takes a password. The third is headroom, not an invitation.
-    static let maximumPrompts = 3
 
     /// The socket path and the nonce travel in the environment of the `ssh`
     /// process, and on macOS anything running as this user can read another of
@@ -314,34 +306,34 @@ final class AskpassChannel: @unchecked Sendable {
         return String(decoding: collected, as: UTF8.self)
     }
 
-    /// Writes the password followed by a newline, which is what `ssh` expects
-    /// from an askpass program on stdout.
+    /// Writes the password to the client, then the newline `ssh` expects after
+    /// it. The two are separate writes on purpose: the plaintext is never copied
+    /// out of the locked buffer to have a newline appended to it, so it travels
+    /// straight from the `SecureBuffer` to the socket and lives in no ordinary
+    /// heap array along the way. The newline is not secret.
     private func send(to client: Int32) {
-        password.withBytes { bytes in
-            // Sized once, so appending the newline cannot make the array move
-            // and leave a stale copy of the password behind in freed memory.
-            var payload = [UInt8]()
-            payload.reserveCapacity(bytes.count + 1)
-            payload.append(contentsOf: bytes)
-            payload.append(0x0A)
-            payload.withUnsafeBytes { raw in
-                var offset = 0
-                while offset < raw.count {
-                    let written = write(client, raw.baseAddress!.advanced(by: offset), raw.count - offset)
-                    if written > 0 {
-                        offset += written
-                        continue
-                    }
-                    if written < 0 && errno == EINTR { continue }
-                    break
-                }
+        let wrotePassword = password.withBytes { writeAll(client, $0) } ?? false
+        guard wrotePassword else { return }
+        var newline: UInt8 = 0x0A
+        withUnsafeBytes(of: &newline) { _ = writeAll(client, $0) }
+    }
+
+    /// Writes an entire buffer to the descriptor, resuming after a partial write
+    /// and retrying on `EINTR`. Returns false if it could not be finished.
+    @discardableResult
+    private func writeAll(_ client: Int32, _ buffer: UnsafeRawBufferPointer) -> Bool {
+        guard let base = buffer.baseAddress else { return true }
+        var offset = 0
+        while offset < buffer.count {
+            let written = write(client, base.advanced(by: offset), buffer.count - offset)
+            if written > 0 {
+                offset += written
+                continue
             }
-            payload.withUnsafeMutableBytes { buffer in
-                if let address = buffer.baseAddress {
-                    memset_s(address, buffer.count, 0, buffer.count)
-                }
-            }
+            if written < 0 && errno == EINTR { continue }
+            return false
         }
+        return true
     }
 
     private func record(_ change: (inout Outcome) -> Void) {

@@ -98,6 +98,7 @@ final class EncryptedStoreTests: XCTestCase {
 
         let reopened = makeStore()
         XCTAssertTrue(reopened.isLocked)
+        XCTAssertFalse(reopened.isUnavailable)
         XCTAssertTrue(reopened.connections.isEmpty)
         let warning = try XCTUnwrap(reopened.storageError)
         XCTAssertTrue(
@@ -270,5 +271,116 @@ final class EncryptedStoreTests: XCTestCase {
 
         let locked = makeStore()
         XCTAssertThrowsError(try locked.export(to: directory.appendingPathComponent("x.json")))
+    }
+
+    // MARK: - A file that cannot be read
+
+    private var connectionsFile: URL {
+        ConnectionFileStore(directoryURL: directory).fileURL
+    }
+
+    private func reopenAfterPlanting(_ contents: Data) throws -> ConnectionStore {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try contents.write(to: connectionsFile)
+        return makeStore()
+    }
+
+    private func assertFileUnchanged(_ original: Data, after work: () throws -> Void) throws {
+        try work()
+        XCTAssertEqual(try Data(contentsOf: connectionsFile), original)
+    }
+
+    func testAMissingFileIsAnOrdinaryEmptyStore() throws {
+        let scratch = directory.deletingLastPathComponent()
+            .appendingPathComponent("SSH-Wakey-missing-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let fresh = ConnectionStore(
+            fileStore: ConnectionFileStore(directoryURL: scratch),
+            keychainAccount: "missing-\(UUID().uuidString)")
+
+        XCTAssertFalse(fresh.isUnavailable)
+        XCTAssertFalse(fresh.isLocked)
+        XCTAssertEqual(fresh.access, .open)
+        XCTAssertTrue(fresh.connections.isEmpty)
+        XCTAssertNil(fresh.storageError)
+
+        fresh.add(SSHConnection(name: "Studio", username: "admin", host: "10.0.0.4"))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: ConnectionFileStore(directoryURL: scratch).fileURL.path))
+        XCTAssertEqual(fresh.connections.count, 1)
+    }
+
+    func testGarbageJSONIsUnavailableAndIsNotOverwritten() throws {
+        let original = Data("this is not json".utf8)
+        let reopened = try reopenAfterPlanting(original)
+
+        XCTAssertTrue(reopened.isUnavailable)
+        XCTAssertFalse(reopened.isLocked)
+        XCTAssertFalse(reopened.isEncrypted)
+        XCTAssertTrue(reopened.connections.isEmpty)
+        XCTAssertEqual(reopened.access, .unavailable)
+        let warning = try XCTUnwrap(reopened.storageError)
+        XCTAssertTrue(warning.localizedCaseInsensitiveContains("damaged or altered"), warning)
+
+        try assertFileUnchanged(original) {
+            reopened.add(SSHConnection(name: "Studio", username: "admin", host: "10.0.0.4"))
+            try reopened.enableEncryption(passphrase: passphrase)
+        }
+        XCTAssertTrue(reopened.connections.isEmpty)
+        XCTAssertFalse(reopened.isEncrypted)
+    }
+
+    func testAnExistingEmptyFileIsUnavailableAndIsNotOverwritten() throws {
+        let original = Data()
+        let reopened = try reopenAfterPlanting(original)
+
+        XCTAssertTrue(reopened.isUnavailable)
+        XCTAssertEqual(reopened.access, .unavailable)
+        try assertFileUnchanged(original) {
+            reopened.add(SSHConnection(name: "Studio", username: "admin", host: "10.0.0.4"))
+        }
+    }
+
+    func testANewerFormatIsUnavailableAndSaysTheAppIsTooOld() throws {
+        let original = Data("""
+        {"version":99,"connections":[]}
+        """.utf8)
+        let reopened = try reopenAfterPlanting(original)
+
+        XCTAssertTrue(reopened.isUnavailable)
+        XCTAssertFalse(reopened.isLocked)
+        let warning = try XCTUnwrap(reopened.storageError)
+        XCTAssertTrue(warning.localizedCaseInsensitiveContains("too old"), warning)
+        XCTAssertFalse(warning.localizedCaseInsensitiveContains("damaged or altered"), warning)
+
+        try assertFileUnchanged(original) {
+            reopened.add(SSHConnection(name: "Studio", username: "admin", host: "10.0.0.4"))
+        }
+    }
+
+    func testExportIsRefusedWhileUnavailable() throws {
+        let reopened = try reopenAfterPlanting(Data("this is not json".utf8))
+        let destination = directory.appendingPathComponent("should-not-exist.json")
+
+        XCTAssertThrowsError(try reopened.export(to: destination))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    func testASaveFailureDoesNotMarkTheStoreUnavailable() throws {
+        XCTAssertEqual(store.access, .open)
+        // A directory standing where the file should be makes the atomic
+        // replace fail, without relying on POSIX permissions in /tmp.
+        try FileManager.default.removeItem(at: connectionsFile)
+        try FileManager.default.createDirectory(
+            at: connectionsFile, withIntermediateDirectories: false)
+
+        store.add(SSHConnection(name: "Other", username: "ci", host: "10.0.0.8"))
+
+        XCTAssertFalse(store.isUnavailable)
+        XCTAssertFalse(store.isLocked)
+        XCTAssertEqual(store.access, .open)
+        XCTAssertNotNil(store.storageError)
+        XCTAssertEqual(store.connections.count, 2)
     }
 }

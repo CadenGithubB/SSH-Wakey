@@ -96,37 +96,39 @@ final class PasswordChannelTests: XCTestCase {
         XCTAssertTrue(channel.outcome.served)
     }
 
-    /// ssh offers the password to each method the server advertises, wording
-    /// the prompt differently each time. That is one login attempt, not a
-    /// retry, and refusing it was refusing the login.
-    func testADifferentPromptIsAnswered() throws {
+    /// One password, one attempt: once the password has been served, a later
+    /// prompt goes unanswered even when it is worded differently by another
+    /// authentication method. A fresh attempt needs a fresh channel.
+    func testASecondPromptIsRefusedEvenIfDifferent() throws {
         let channel = try AskpassChannel(password: SecureBuffer(secret))
         defer { channel.invalidate() }
         let path = try socketPath(of: channel)
 
-        let keyboardInteractive = ask(
+        let first = ask(
             socket: path, nonce: channel.nonce, prompt: "(admin@10.0.0.4) Password:")
-        let passwordMethod = ask(
+        let second = ask(
             socket: path, nonce: channel.nonce, prompt: "admin@10.0.0.4's password: ")
 
-        XCTAssertEqual(String(decoding: try XCTUnwrap(keyboardInteractive), as: UTF8.self), secret + "\n")
-        XCTAssertEqual(String(decoding: try XCTUnwrap(passwordMethod), as: UTF8.self), secret + "\n")
-        XCTAssertEqual(channel.outcome.repeatedPrompts, 0)
+        XCTAssertEqual(String(decoding: try XCTUnwrap(first), as: UTF8.self), secret + "\n")
+        XCTAssertTrue(second?.isEmpty ?? true, "the password must be served only once")
+        XCTAssertEqual(channel.outcome.repeatedPrompts, 1)
+        XCTAssertTrue(channel.outcome.served)
     }
 
-    func testItStopsAfterAFewDifferentPrompts() throws {
+    func testOnlyTheFirstOfManyPromptsIsAnswered() throws {
         let channel = try AskpassChannel(password: SecureBuffer(secret))
         defer { channel.invalidate() }
         let path = try socketPath(of: channel)
 
-        for index in 0..<AskpassChannel.maximumPrompts {
-            let answer = ask(socket: path, nonce: channel.nonce, prompt: "password \(index):")
-            XCTAssertFalse(answer?.isEmpty ?? true, "prompt \(index) should have been answered")
-        }
+        let first = ask(socket: path, nonce: channel.nonce, prompt: "password 0:")
+        XCTAssertEqual(String(decoding: try XCTUnwrap(first), as: UTF8.self), secret + "\n")
 
-        let beyond = ask(socket: path, nonce: channel.nonce, prompt: "password again:")
-        XCTAssertTrue(beyond?.isEmpty ?? true)
-        XCTAssertEqual(channel.outcome.repeatedPrompts, 1)
+        for index in 1..<4 {
+            let answer = ask(socket: path, nonce: channel.nonce, prompt: "password \(index):")
+            XCTAssertTrue(answer?.isEmpty ?? true, "prompt \(index) should have gone unanswered")
+        }
+        XCTAssertEqual(channel.outcome.repeatedPrompts, 3)
+        XCTAssertTrue(channel.outcome.served)
     }
 
     func testTheChannelIsUnusableOnceTheAttemptIsOver() throws {
@@ -329,7 +331,7 @@ final class PasswordChannelReportingTests: XCTestCase {
 
         let annotated = SSHSessionManager.annotated(failure, with: outcome)
         let guidance = try? XCTUnwrap(annotated.guidance)
-        XCTAssertTrue(guidance?.contains("same question") ?? false, annotated.guidance ?? "")
+        XCTAssertTrue(guidance?.contains("password again") ?? false, annotated.guidance ?? "")
         XCTAssertTrue(guidance?.contains("failed logins") ?? false, annotated.guidance ?? "")
     }
 

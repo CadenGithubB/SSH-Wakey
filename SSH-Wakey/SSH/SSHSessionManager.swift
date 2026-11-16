@@ -572,9 +572,10 @@ final class SSHSessionManager {
         }
 
         if outcome.repeatedPrompts > 0 {
-            notes.append("ssh asked the same question it had already been answered. That goes "
+            notes.append("ssh asked for the password again after it had already been given once. "
+                + "SSH-Wakey answers a single password prompt per attempt and left the rest "
                 + "unanswered, because repeating a password that has just been rejected only "
-                + "produces more failed logins.")
+                + "produces more failed logins. Press Connect to try again.")
         }
         for prompt in outcome.refusedPrompts where !prompt.isEmpty {
             notes.append("This prompt went unanswered because it is not a password prompt: \(prompt)")
@@ -625,8 +626,8 @@ final class SSHSessionManager {
                 // the name here is only a placeholder.
                 _ = try? await ProcessRunner.run(
                     executable: SSHCommandBuilder.sshExecutable,
-                    arguments: ["-o", "ControlPath=\(control.path)", "-O", "exit",
-                                "abandoned-session"],
+                    arguments: SSHCommandBuilder.abandonedControlArguments(
+                        controlPath: control.path),
                     timeout: 5)
             }
             try? FileManager.default.removeItem(at: entry)

@@ -368,14 +368,24 @@ Extra arguments are split by the app, honouring quotes and backslashes, and are
 passed to `Process` as an array. No shell is involved, so `;`, `|`, `$(...)` and
 friends are just characters. Options are then checked:
 
-- Refused as dangerous: anything that can make `ssh` run another program or
-  redirect its trust decisions, including `ProxyCommand`, `LocalCommand`,
-  `PermitLocalCommand`, `KnownHostsCommand`, `PKCS11Provider`, `Match`,
-  `Include` and `UserKnownHostsFile`.
+- `-o` options are an allow list: only a fixed set that tunes how the one
+  connection is made is accepted, so a keyword nobody has vetted — including a
+  future one that can run code — is refused by default. `ProxyCommand`,
+  `LocalCommand`, `PermitLocalCommand`, `KnownHostsCommand`, `PKCS11Provider`,
+  `Match`, `Include` and `UserKnownHostsFile` are also named so the refusal
+  explains itself.
+- Refused as dangerous flags: `-F` (an alternate config file that can contain
+  any of the above) and `-I` (loads a PKCS#11 library into `ssh`, the
+  command-line twin of `PKCS11Provider`).
 - Refused as reserved: options the app sets itself, such as `-p`, `-l`, `-M`,
-  `-S`, `StrictHostKeyChecking` and `ControlPath`.
+  `-S`, `-q`, `StrictHostKeyChecking`, `LogLevel` and `ControlPath`.
 - Refused as unrecognised: any flag that is not a real `ssh` option, and any
   bare operand, since the destination comes from the fields.
+
+SSH-Wakey runs `ssh` with `-F /dev/null`, uses your `~/.ssh/known_hosts` as its
+only user host-key file, and disables the global host-key file. Settings in
+`~/.ssh/config` or the system SSH config cannot add a local command, redirect,
+forwarding rule, or alternate trust source to a connection.
 
 ---
 
@@ -415,9 +425,10 @@ model, and its limits, properly.
 ### One password, one attempt
 
 When the first authentication method rejects the password, `ssh` asks again for
-the next method. Answering would be a silent retry, so SSH-Wakey does not; it
-reports that it happened and you press Connect again. A wrong password therefore
-costs one failed attempt per method offered, not a loop.
+the next method. Answering would be a silent retry, so SSH-Wakey does not: it
+serves a single password prompt per attempt, reports that a further prompt went
+unanswered, and you press Connect again. A wrong password therefore costs one
+failed login, not a loop.
 
 ---
 
@@ -575,12 +586,12 @@ SSH-Wakey/
     ProcessRunner.swift     Small async wrapper around Process
     DiagnosticsReport.swift Recent attempts, also written by Save Diagnostics
   Views/                    SwiftUI window, editor, password prompt, activity, host key sheet
-SSH-WakeyTests/             254 tests
+SSH-WakeyTests/             283 tests
 ```
 
 ## Tests
 
-254 unit tests covering persistence and its file permissions, timestamps, change
+283 unit tests covering persistence and its file permissions, timestamps, change
 history, the encrypted file and both ways into it, appending to known_hosts, which columns may be hidden and how the table
 layout is saved, field and argument validation, command construction, wake packets
 and MAC parsing, managed-catalog overlays, failure

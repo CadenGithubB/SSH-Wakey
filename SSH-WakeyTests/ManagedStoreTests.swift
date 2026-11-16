@@ -68,6 +68,21 @@ final class ManagedStoreTests: XCTestCase {
         XCTAssertTrue(isolated.connections.isEmpty)
     }
 
+    func testAForcedRowWithAnUnsafeFieldIsDropped() {
+        let profile = SnapshotPreferences(
+            values: [
+                ManagedPolicy.connectionsKey: [
+                    ["Name": "Good", "Username": "admin", "Host": "192.168.1.10"],
+                    ["Name": "Dash host", "Username": "admin", "Host": "-oProxyCommand=x"],
+                    ["Name": "Dash user", "Username": "-oProxyCommand=x", "Host": "192.168.1.11"],
+                ],
+            ],
+            forced: [ManagedPolicy.connectionsKey])
+        let policy = ManagedPolicy.load(from: profile, acceptsManagedPreferences: true)
+        XCTAssertEqual(policy.connections.map(\.name), ["Good"],
+                       "a forced row whose fields fail validation must be dropped, not carried to ssh")
+    }
+
     func testStandardIgnoresAForcedPayload() {
         let isolated = ConnectionStore(
             fileStore: ConnectionFileStore(directoryURL: directory),
@@ -131,5 +146,15 @@ final class StatusPanelIdleTests: XCTestCase {
         XCTAssertEqual(
             StatusPanel.unselectedGuidance(isManagedCatalog: false, assignedCount: 0),
             "Add a machine, or pick one from the list.")
+    }
+
+    func testUnavailableIdleCopyDoesNotInviteAdding() {
+        XCTAssertEqual(
+            StatusPanel.unselectedHeadline(
+                isManagedCatalog: false, assignedCount: 0, fileUnavailable: true),
+            "The saved connections file could not be opened.")
+        XCTAssertNil(
+            StatusPanel.unselectedGuidance(
+                isManagedCatalog: false, assignedCount: 0, fileUnavailable: true))
     }
 }

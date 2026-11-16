@@ -21,6 +21,7 @@ enum SSHArgumentParser {
         case unknownOption(String)
         case reservedOption(String)
         case dangerousOption(String)
+        case unsupportedKeyword(String)
 
         var errorDescription: String? {
             switch self {
@@ -40,6 +41,8 @@ enum SSHArgumentParser {
                 return "\(option) is set by SSH-Wakey itself and cannot be overridden here."
             case .dangerousOption(let option):
                 return "\(option) can make ssh run another program on this Mac, so it is not allowed."
+            case .unsupportedKeyword(let option):
+                return "\(option) is not one of the ssh options SSH-Wakey allows. It passes only a fixed set of safe connection options; if you need this one, it can be added to the allow list."
             }
         }
     }
@@ -54,15 +57,49 @@ enum SSHArgumentParser {
 
     /// Options SSH-Wakey supplies from the connection fields or from its own
     /// session management. Letting them be set twice produces confusing results.
+    /// `loglevel` is here because the app relies on `LogLevel=VERBOSE` to tell a
+    /// successful login from a refused one.
     static let reservedKeywords: Set<String> = [
         "controlpath", "controlmaster", "controlpersist", "stricthostkeychecking",
         "numberofpasswordprompts", "batchmode", "user", "hostname", "port",
         "connecttimeout", "requesttty", "sessiontype", "forkafterauthentication",
+        "loglevel",
     ]
 
-    private static let reservedFlags: Set<Character> = ["M", "S", "N", "f", "p", "l", "O", "W", "Q", "V", "G", "E", "s"]
-    private static let valueFlags: Set<Character> = ["b", "c", "D", "F", "I", "i", "J", "L", "m", "o", "R", "w"]
-    private static let booleanFlags: Set<Character> = ["4", "6", "A", "a", "C", "g", "K", "k", "n", "q", "t", "T", "v", "X", "x", "Y", "y"]
+    /// The only `-o KEYWORD=value` options that pass. This is an allow list, not
+    /// a block list: a keyword is refused unless it is named here, so a future
+    /// ssh option that can run a program, load a library, or move where trust is
+    /// read from is refused by default rather than slipping through until someone
+    /// thinks to block it. Every entry only tunes how this one connection is
+    /// made; none can execute anything locally or redirect a trust decision.
+    static let allowedKeywords: Set<String> = [
+        // How the connection itself is made.
+        "serveraliveinterval", "serveralivecountmax", "connectionattempts",
+        "tcpkeepalive", "compression", "ipqos", "addressfamily",
+        "bindaddress", "bindinterface",
+        // Which authentication methods ssh may offer, and the keys it may use.
+        // None of these run a program or change where host keys are read from.
+        "preferredauthentications", "pubkeyauthentication", "passwordauthentication",
+        "kbdinteractiveauthentication", "challengeresponseauthentication",
+        "gssapiauthentication", "hostbasedauthentication",
+        "identitiesonly", "identityfile", "addkeystoagent",
+        // Algorithm selection, for reaching older or hardened servers.
+        "ciphers", "macs", "kexalgorithms", "hostkeyalgorithms",
+        "pubkeyacceptedalgorithms", "pubkeyacceptedkeytypes",
+        "casignaturealgorithms", "fingerprinthash",
+    ]
+
+    /// `-F` loads an alternate config (which can carry any dangerous keyword),
+    /// and `-I` names a PKCS#11 shared library for ssh to load — the
+    /// command-line twin of `PKCS11Provider`, and another way to run code inside
+    /// the ssh process. Both are refused on sight.
+    private static let dangerousFlags: Set<Character> = ["F", "I"]
+    /// Flags the app sets itself, plus `-q`: quiet mode pins ssh's log level and
+    /// would suppress the `LogLevel=VERBOSE` output the app reads to tell a
+    /// successful login from a refused one.
+    private static let reservedFlags: Set<Character> = ["M", "S", "N", "f", "p", "l", "O", "W", "Q", "V", "G", "E", "s", "q"]
+    private static let valueFlags: Set<Character> = ["b", "c", "D", "i", "J", "L", "m", "o", "R", "w"]
+    private static let booleanFlags: Set<Character> = ["4", "6", "A", "a", "C", "g", "K", "k", "n", "t", "T", "v", "X", "x", "Y", "y"]
 
     /// Tokenise and check in one step. This is what callers should use.
     static func parse(_ text: String) throws -> [String] {
@@ -140,6 +177,9 @@ enum SSHArgumentParser {
             var consumedValue = false
 
             for (offset, letter) in letters.enumerated() {
+                if dangerousFlags.contains(letter) {
+                    throw ParseError.dangerousOption("-\(letter)")
+                }
                 if reservedFlags.contains(letter) {
                     throw ParseError.reservedOption("-\(letter)")
                 }
@@ -171,11 +211,18 @@ enum SSHArgumentParser {
             .prefix { $0 != "=" && $0 != " " }
             .trimmingCharacters(in: .whitespaces)
             .lowercased()
+        // Dangerous and reserved are named explicitly so the person gets a
+        // precise reason for the refusal. Anything else has to be on the allow
+        // list, or it is refused: the list, not this pair of sets, is what keeps
+        // an unvetted ssh keyword from reaching the command line.
         if dangerousKeywords.contains(keyword) {
             throw ParseError.dangerousOption("-o \(keyword)")
         }
         if reservedKeywords.contains(keyword) {
             throw ParseError.reservedOption("-o \(keyword)")
+        }
+        guard allowedKeywords.contains(keyword) else {
+            throw ParseError.unsupportedKeyword("-o \(keyword)")
         }
     }
 }

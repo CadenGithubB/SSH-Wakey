@@ -119,7 +119,7 @@ struct ManagedPolicy: Equatable, Sendable {
             let port = int(row, "Port") ?? SSHConnection.defaultPort
             guard (1...65535).contains(port) else { continue }
             let name = string(row, "Name").flatMap { $0.isEmpty ? nil : $0 } ?? host
-            parsed.append(SSHConnection(
+            let connection = SSHConnection(
                 id: stableID(username: username, host: host, port: port),
                 name: name,
                 username: username,
@@ -127,7 +127,13 @@ struct ManagedPolicy: Equatable, Sendable {
                 port: port,
                 extraArguments: "",
                 strictHostKeyChecking: true,
-                connectMode: .unlock))
+                connectMode: .unlock)
+            // A forced profile is trusted, but not held above the field rules the
+            // editor enforces. A username or host with a leading dash or a
+            // shell-unsafe character is dropped here rather than carried into an
+            // ssh argument list and refused later at connect time.
+            guard ConnectionValidator.isValid(connection) else { continue }
+            parsed.append(connection)
         }
         return parsed
     }

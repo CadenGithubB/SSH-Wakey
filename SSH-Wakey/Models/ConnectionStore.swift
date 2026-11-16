@@ -13,6 +13,9 @@ final class ConnectionStore {
         case open
         /// Encrypted, and no key has opened it yet.
         case locked
+        /// A file is on disk but could not be read. The in-memory list is empty
+        /// and must not be written back, or the original would be replaced.
+        case unavailable
     }
 
     private(set) var connections: [SSHConnection] = []
@@ -38,6 +41,9 @@ final class ConnectionStore {
 
     var fileURL: URL { fileStore.fileURL }
     var isLocked: Bool { access == .locked }
+    /// The file exists and failed to load. Distinct from `isLocked`: there is
+    /// nothing to Unlock, and Settings must not call this plain text.
+    var isUnavailable: Bool { access == .unavailable }
 
     init(
         fileStore: ConnectionFileStore = ConnectionFileStore(),
@@ -89,9 +95,19 @@ final class ConnectionStore {
                 try openEncrypted(stored)
             }
         } catch {
-            adopt(connections: [], vault: nil, dataKey: nil, encrypted: false)
-            storageError = error.localizedDescription
+            refuseLoad(error)
         }
+    }
+
+    /// Keeps the damaged file on disk. Adopting an empty open store would let
+    /// Add or Turn On Encryption replace it.
+    private func refuseLoad(_ error: Error) {
+        connections = []
+        vault = nil
+        dataKey = nil
+        isEncrypted = false
+        access = .unavailable
+        storageError = error.localizedDescription
     }
 
     /// Opens an encrypted file with the Keychain key when it is there.
@@ -339,7 +355,11 @@ final class ConnectionStore {
     /// write, so it is held for as short a time as possible.
     func export(to url: URL, passphrase: String? = nil) throws {
         guard !isManagedBuild else { throw ConnectionFileStore.StoreError.encrypted }
-        guard access == .open else { throw ConnectionFileStore.StoreError.encrypted }
+        guard access == .open else {
+            throw access == .unavailable
+                ? ConnectionFileStore.StoreError.unreadable("the saved file could not be opened")
+                : ConnectionFileStore.StoreError.encrypted
+        }
 
         if let vault {
             guard let passphrase else { throw VaultError.wrongPassphrase }

@@ -288,9 +288,9 @@ struct SSHOptionsReference: View {
                     Text("""
                     Anything that can make ssh run another program on this Mac: ProxyCommand, \
                     LocalCommand, PermitLocalCommand, KnownHostsCommand, PKCS11Provider, Match, \
-                    Include. Anything that points ssh at a different known_hosts. And anything \
-                    SSH-Wakey sets itself, such as -p, -l, -M, -S, ControlPath and \
-                    StrictHostKeyChecking.
+                    Include, and -F, which loads a config file that can contain those. Anything \
+                    that points ssh at a different known_hosts. And anything SSH-Wakey sets \
+                    itself, such as -p, -l, -M, -S, ControlPath and StrictHostKeyChecking.
 
                     Arguments are split by SSH-Wakey, never by a shell, so quotes group words and \
                     $(...) is just text.

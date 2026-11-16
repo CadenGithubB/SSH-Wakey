@@ -123,7 +123,7 @@ struct ConnectionFileStore: Sendable {
         var errorDescription: String? {
             switch self {
             case .unsupportedVersion(let version):
-                return "The saved connections file uses format version \(version), which this version of SSH-Wakey cannot read."
+                return "The saved connections file uses format version \(version), which this copy of SSH-Wakey is too old to read. Update the app rather than replacing the file."
             case .unreadable(let reason):
                 return "The saved connections file could not be read: \(reason)"
             case .damagedOrAltered(let reason):
@@ -152,7 +152,9 @@ struct ConnectionFileStore: Sendable {
     }
 
     /// Reads whichever form the file is in. Empty when it does not exist yet,
-    /// which is the normal first-launch case.
+    /// which is the normal first-launch case. A file that exists but holds no
+    /// bytes is not first launch — this app never writes an empty file — and is
+    /// refused so it cannot be overwritten by a new list.
     func read() throws -> Contents {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return .empty }
         let data: Data
@@ -161,7 +163,9 @@ struct ConnectionFileStore: Sendable {
         } catch {
             throw StoreError.unreadable(error.localizedDescription)
         }
-        guard !data.isEmpty else { return .empty }
+        guard !data.isEmpty else {
+            throw StoreError.damagedOrAltered("the file is empty")
+        }
 
         let document: Document
         do {

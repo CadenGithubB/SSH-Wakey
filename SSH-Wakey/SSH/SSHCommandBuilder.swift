@@ -76,6 +76,19 @@ enum SSHCommandBuilder {
 
     static let sshExecutable = "/usr/bin/ssh"
 
+    /// Do not inherit directives from the user's or system SSH config. The
+    /// connection fields and the checked extra-argument allow-list are the
+    /// complete policy for an SSH-Wakey connection.
+    ///
+    /// Keep the user's host-key file because the host-key review flow displays
+    /// and updates it. Exclude the global file so it cannot silently add a
+    /// second trust source.
+    private static let isolatedConfigurationArguments = [
+        "-F", "/dev/null",
+        "-o", "GlobalKnownHostsFile=/dev/null",
+        "-o", "UserKnownHostsFile=\(HostKeyService.knownHostsURL.path)",
+    ]
+
     /// The long-lived master connection. `-N` means no remote command is
     /// started, so this process exists only to hold the authenticated
     /// connection open; other ssh clients attach to it through the control
@@ -89,6 +102,9 @@ enum SSHCommandBuilder {
         var arguments = [
             "-M",
             "-N",
+        ]
+        arguments.append(contentsOf: isolatedConfigurationArguments)
+        arguments.append(contentsOf: [
             "-o", "ControlPath=\(controlPath)",
             "-o", "ControlPersist=no",
             "-o", "StrictHostKeyChecking=\(candidate.strictHostKeyChecking ? "yes" : "accept-new")",
@@ -101,7 +117,7 @@ enum SSHCommandBuilder {
             "-o", "LogLevel=VERBOSE",
             "-p", String(candidate.port),
             "-l", candidate.username,
-        ]
+        ])
         arguments.append(contentsOf: try SSHArgumentParser.parse(candidate.extraArguments))
         arguments.append(candidate.host)
         return arguments
@@ -121,6 +137,9 @@ enum SSHCommandBuilder {
         let candidate = connection.normalized
         var arguments = [
             "-N",
+        ]
+        arguments.append(contentsOf: isolatedConfigurationArguments)
+        arguments.append(contentsOf: [
             "-o", "StrictHostKeyChecking=\(candidate.strictHostKeyChecking ? "yes" : "accept-new")",
             "-o", "NumberOfPasswordPrompts=1",
             "-o", "BatchMode=no",
@@ -128,7 +147,7 @@ enum SSHCommandBuilder {
             "-o", "LogLevel=VERBOSE",
             "-p", String(candidate.port),
             "-l", candidate.username,
-        ]
+        ])
         arguments.append(contentsOf: try SSHArgumentParser.parse(candidate.extraArguments))
         arguments.append(candidate.host)
         return arguments
@@ -141,12 +160,23 @@ enum SSHCommandBuilder {
         command: String
     ) -> [String] {
         let candidate = connection.normalized
-        return [
+        return isolatedConfigurationArguments + [
             "-o", "ControlPath=\(controlPath)",
             "-O", command,
             "-p", String(candidate.port),
             "-l", candidate.username,
             candidate.host,
+        ]
+    }
+
+    /// Closes an abandoned master without needing the original connection
+    /// fields. It still uses the same isolated policy as every other ssh
+    /// invocation made by the app.
+    static func abandonedControlArguments(controlPath: String) -> [String] {
+        isolatedConfigurationArguments + [
+            "-o", "ControlPath=\(controlPath)",
+            "-O", "exit",
+            "abandoned-session",
         ]
     }
 
@@ -157,7 +187,7 @@ enum SSHCommandBuilder {
         controlPath: String
     ) -> [String] {
         let candidate = connection.normalized
-        return [
+        return isolatedConfigurationArguments + [
             "-o", "ControlPath=\(controlPath)",
             "-o", "ControlMaster=no",
             "-p", String(candidate.port),

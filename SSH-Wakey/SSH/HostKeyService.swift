@@ -110,6 +110,11 @@ enum HostKeyService {
     /// whole thing back would discard anything ssh recorded in between, replace
     /// the file with a new inode, drop extended attributes, and turn a symlinked
     /// known_hosts into a regular file. An `O_APPEND` write does none of that.
+    ///
+    /// An existing symlink is followed, but only if the opened target is a
+    /// regular file this user owns and that is not group- or world-writable.
+    /// A missing file is created in place (`O_EXCL | O_NOFOLLOW`) so a symlink
+    /// cannot win the create race.
     static func trust(_ candidates: [HostKeyCandidate], at url: URL = knownHostsURL) throws {
         guard !candidates.isEmpty else { return }
 
@@ -118,25 +123,21 @@ enum HostKeyService {
                 "ssh-keyscan returned something that is not a host key line, so nothing was added.")
         }
 
-        let directory = url.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: directory.path) {
-            do {
-                try FileManager.default.createDirectory(
-                    at: directory, withIntermediateDirectories: true,
-                    attributes: [.posixPermissions: 0o700])
-            } catch {
-                throw HostKeyError.notWritten(error.localizedDescription)
-            }
-        }
+        try prepareParentDirectory(url.deletingLastPathComponent())
 
-        var text = candidates.map(\.knownHostsLine).joined(separator: "\n") + "\n"
-        if endsWithoutNewline(url) { text = "\n" + text }
+        let descriptor = try openKnownHosts(url.path)
+        defer { close(descriptor) }
 
-        let descriptor = open(url.path, O_WRONLY | O_APPEND | O_CREAT, 0o600)
-        guard descriptor >= 0 else {
+        var info = Darwin.stat()
+        guard fstat(descriptor, &info) == 0 else {
             throw HostKeyError.notWritten(String(cString: strerror(errno)))
         }
-        defer { close(descriptor) }
+        try validateKnownHostsFile(info)
+
+        var text = candidates.map(\.knownHostsLine).joined(separator: "\n") + "\n"
+        if let last = try lastByte(of: descriptor, size: info.st_size), last != 0x0A {
+            text = "\n" + text
+        }
 
         let payload = Array(text.utf8)
         var offset = 0
@@ -153,13 +154,88 @@ enum HostKeyService {
         }
     }
 
-    /// True when a new entry would otherwise be joined onto the last line.
-    private static func endsWithoutNewline(_ url: URL) -> Bool {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd(), size > 0 else { return false }
-        try? handle.seek(toOffset: size - 1)
-        return (try? handle.read(upToCount: 1)) != Data([0x0A])
+    /// The folder must be a directory this user owns, and not writable by
+    /// group or other. `0755` is fine; `0770` is not.
+    private static func prepareParentDirectory(_ directory: URL) throws {
+        var info = Darwin.stat()
+        if stat(directory.path, &info) != 0 {
+            guard errno == ENOENT else {
+                throw HostKeyError.notWritten(String(cString: strerror(errno)))
+            }
+            do {
+                try FileManager.default.createDirectory(
+                    at: directory, withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+            } catch {
+                throw HostKeyError.notWritten(error.localizedDescription)
+            }
+            guard stat(directory.path, &info) == 0 else {
+                throw HostKeyError.notWritten(String(cString: strerror(errno)))
+            }
+        }
+        guard (info.st_mode & S_IFMT) == S_IFDIR else {
+            throw HostKeyError.notWritten("its folder is not a directory")
+        }
+        guard info.st_uid == getuid() else {
+            throw HostKeyError.notWritten("its folder is not owned by this user")
+        }
+        guard (info.st_mode & 0o022) == 0 else {
+            throw HostKeyError.notWritten("its folder is writable by others")
+        }
+    }
+
+    /// Follow an existing path; create only if nothing is there, and only as a
+    /// regular file at that name.
+    private static func openKnownHosts(_ path: String) throws -> Int32 {
+        let existing = openIgnoringInterrupt(
+            path, O_RDWR | O_APPEND | O_CLOEXEC | O_NONBLOCK)
+        if existing >= 0 { return existing }
+        let opened = errno
+        guard opened == ENOENT else {
+            throw HostKeyError.notWritten(String(cString: strerror(opened)))
+        }
+
+        let created = openIgnoringInterrupt(
+            path, O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
+            0o600)
+        if created >= 0 { return created }
+        throw HostKeyError.notWritten(String(cString: strerror(errno)))
+    }
+
+    private static func openIgnoringInterrupt(
+        _ path: String, _ flags: Int32, _ mode: mode_t = 0
+    ) -> Int32 {
+        while true {
+            let descriptor = open(path, flags, mode)
+            if descriptor >= 0 || errno != EINTR { return descriptor }
+        }
+    }
+
+    private static func validateKnownHostsFile(_ info: Darwin.stat) throws {
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw HostKeyError.notWritten("it is not a regular file")
+        }
+        guard info.st_uid == getuid() else {
+            throw HostKeyError.notWritten("it is not owned by this user")
+        }
+        guard (info.st_mode & 0o022) == 0 else {
+            throw HostKeyError.notWritten("it is writable by others")
+        }
+    }
+
+    /// `nil` when the file is empty, so a new first line needs no separator.
+    private static func lastByte(of descriptor: Int32, size: off_t) throws -> UInt8? {
+        guard size > 0 else { return nil }
+        var last: UInt8 = 0
+        while true {
+            let read = pread(descriptor, &last, 1, size - 1)
+            if read == 1 { return last }
+            if read < 0 && errno == EINTR { continue }
+            if read == 0 {
+                throw HostKeyError.notWritten("the file changed while it was being checked")
+            }
+            throw HostKeyError.notWritten(String(cString: strerror(errno)))
+        }
     }
 
     /// A host pattern, a key type and base64 key material, on one line.

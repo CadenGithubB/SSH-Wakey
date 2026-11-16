@@ -158,25 +158,109 @@ final class ConnectionVaultTests: XCTestCase {
         }
     }
 
-    func testDerivationIsDeterministicAndSaltDependent() {
-        let salt = VaultCrypto.randomBytes(16)
-        let first = VaultCrypto.derive(passphrase, salt: salt, rounds: testRounds)
-        let second = VaultCrypto.derive(passphrase, salt: salt, rounds: testRounds)
-        let other = VaultCrypto.derive(passphrase, salt: VaultCrypto.randomBytes(16), rounds: testRounds)
+    func testDerivationIsDeterministicAndSaltDependent() throws {
+        let salt = VaultCrypto.randomBytes(ConnectionVault.saltSize)
+        let first = try VaultCrypto.derive(passphrase, salt: salt, rounds: testRounds)
+        let second = try VaultCrypto.derive(passphrase, salt: salt, rounds: testRounds)
+        let other = try VaultCrypto.derive(
+            passphrase, salt: VaultCrypto.randomBytes(ConnectionVault.saltSize), rounds: testRounds)
 
         XCTAssertEqual(first, second)
         XCTAssertNotEqual(first, other)
     }
 
     /// Slow on purpose, but it has to stay usable.
-    func testTheShippingRoundCountIsSlowButNotUnbearable() {
+    func testTheShippingRoundCountIsSlowButNotUnbearable() throws {
         let started = Date()
-        _ = VaultCrypto.derive(passphrase, salt: VaultCrypto.randomBytes(16),
-                               rounds: ConnectionVault.defaultRounds)
+        _ = try VaultCrypto.derive(passphrase, salt: VaultCrypto.randomBytes(ConnectionVault.saltSize),
+                                   rounds: ConnectionVault.defaultRounds)
         let elapsed = Date().timeIntervalSince(started)
 
         XCTAssertGreaterThan(elapsed, 0.02, "too fast to be doing real work")
         XCTAssertLessThan(elapsed, 5, "a person is waiting for this")
+    }
+
+    // MARK: - Hostile recovery metadata
+
+    private func assertCorrupted(_ work: () throws -> Void, _ message: String = "") {
+        XCTAssertThrowsError(try work(), message) { error in
+            guard case .corrupted = error as? VaultError else {
+                XCTFail("expected .corrupted, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testNegativeRoundsAreRefusedWithoutCrashing() throws {
+        var vault = try makeVault()
+        vault.passphraseSlot.rounds = -1
+        assertCorrupted {
+            _ = try VaultCrypto.dataKey(from: vault, passphrase: passphrase)
+        }
+    }
+
+    func testOversizedRoundsAreRefusedWithoutCrashing() throws {
+        var vault = try makeVault()
+        vault.passphraseSlot.rounds = Int.max
+        assertCorrupted {
+            _ = try VaultCrypto.dataKey(from: vault, passphrase: passphrase)
+        }
+    }
+
+    func testRoundsAboveTheMaximumAreRefused() throws {
+        var vault = try makeVault()
+        vault.passphraseSlot.rounds = ConnectionVault.maximumRounds + 1
+        assertCorrupted {
+            _ = try VaultCrypto.dataKey(from: vault, passphrase: passphrase)
+        }
+    }
+
+    func testADamagedPassphraseSlotDoesNotBlockTheKeychainSlot() throws {
+        let keychainKey = KeychainKeyStore.makeKey()
+        var vault = try makeVault(keychainKey: keychainKey)
+        vault.passphraseSlot.rounds = -1
+
+        let dataKey = try VaultCrypto.dataKey(from: vault, keychainKey: keychainKey)
+        XCTAssertEqual(try VaultCrypto.connections(in: vault, using: dataKey), connections)
+
+        assertCorrupted {
+            _ = try VaultCrypto.dataKey(from: vault, passphrase: passphrase)
+        }
+    }
+
+    func testAnEmptySaltIsRefused() throws {
+        var vault = try makeVault()
+        vault.passphraseSlot.salt = Data()
+        assertCorrupted {
+            _ = try VaultCrypto.dataKey(from: vault, passphrase: passphrase)
+        }
+        XCTAssertThrowsError(try VaultCrypto.derive(passphrase, salt: Data(), rounds: testRounds)) {
+            guard case .corrupted = $0 as? VaultError else {
+                return XCTFail("expected .corrupted, got \($0)")
+            }
+        }
+    }
+
+    func testAnEmptyPassphraseDoesNotCrashDerivation() throws {
+        XCTAssertThrowsError(try VaultCrypto.derive(
+            "", salt: VaultCrypto.randomBytes(ConnectionVault.saltSize), rounds: testRounds)) {
+            guard case .corrupted = $0 as? VaultError else {
+                return XCTFail("expected .corrupted, got \($0)")
+            }
+        }
+        let vault = try makeVault()
+        XCTAssertThrowsError(try VaultCrypto.dataKey(from: vault, passphrase: "")) {
+            XCTAssertEqual($0 as? VaultError, .wrongPassphrase)
+        }
+    }
+
+    func testZeroRoundsAreRefusedWithoutCrashing() {
+        XCTAssertThrowsError(try VaultCrypto.derive(
+            passphrase, salt: VaultCrypto.randomBytes(ConnectionVault.saltSize), rounds: 0)) {
+            guard case .corrupted = $0 as? VaultError else {
+                return XCTFail("expected .corrupted, got \($0)")
+            }
+        }
     }
 
     // MARK: - The suggested passphrase

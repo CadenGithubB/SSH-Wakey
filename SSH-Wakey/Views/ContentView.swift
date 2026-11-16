@@ -72,12 +72,13 @@ struct ContentView: View {
             StatusPanel(
                 connection: selectedConnection,
                 state: selectedState,
-                storageError: store.storageError,
+                storageError: store.isUnavailable ? nil : store.storageError,
                 actionError: sessions.lastActionError,
                 redactsAddresses: !isRevealed(selectedConnection?.id),
                 selectedCount: selection.count,
                 isManagedCatalog: store.isManagedBuild,
                 assignedCount: store.connections.count,
+                fileUnavailable: store.isUnavailable,
                 onCancel: {
                     if let id = selectedConnection?.id { sessions.cancelConnect(id) }
                 },
@@ -149,7 +150,19 @@ struct ContentView: View {
 
     @ViewBuilder
     private var listArea: some View {
-        if store.isLocked {
+        if store.isUnavailable {
+            ContentUnavailableView {
+                Label(
+                    "The saved connections file could not be opened",
+                    systemImage: "exclamationmark.shield.fill")
+            } description: {
+                if let storageError = store.storageError {
+                    Text(storageError)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .controlBackgroundColor))
+        } else if store.isLocked {
             ContentUnavailableView {
                 Label(
                     store.storageError == nil
@@ -462,14 +475,14 @@ struct ContentView: View {
         HStack(spacing: 10) {
             if !store.isManagedBuild {
                 Button("Add") { sheet = .add }
-                    .disabled(store.isLocked)
+                    .disabled(store.isLocked || store.isUnavailable)
 
                 // Edit only when exactly one row is selected. Remove works for one
                 // or many. Both are absent rather than dimmed when there is nothing
                 // to act on.
                 if let connection = selectedConnection {
                     Button("Edit") { sheet = .edit(connection) }
-                        .disabled(store.isLocked || selectedState.isConnected
+                        .disabled(store.isLocked || store.isUnavailable || selectedState.isConnected
                                   || selectedState.isConnecting)
                 }
 
@@ -477,7 +490,7 @@ struct ContentView: View {
                     Button(selection.count == 1 ? "Remove" : "Remove (\(selection.count))") {
                         removalTargets = selectedConnections
                     }
-                    .disabled(store.isLocked || selectionIsBusy)
+                    .disabled(store.isLocked || store.isUnavailable || selectionIsBusy)
                 }
             }
 
@@ -536,7 +549,7 @@ struct ContentView: View {
                     .pickerStyle(.menu)
                     .labelsHidden()
                     .fixedSize()
-                    .disabled(store.isLocked)
+                    .disabled(store.isLocked || store.isUnavailable)
                     .help(connection.connectMode.explanation)
                 }
 
@@ -544,7 +557,7 @@ struct ContentView: View {
                     activate(connection)
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(store.isLocked)
+                .disabled(store.isLocked || store.isUnavailable)
             }
         }
     }

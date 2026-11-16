@@ -30,6 +30,17 @@ final class SSHCommandBuilderTests: XCTestCase {
         XCTAssertTrue(arguments.contains("ConnectTimeout=10"))
     }
 
+    func testMasterAndUnlockIgnoreSSHConfigAndUseOnlyTheAppKnownHostsFile() throws {
+        let expectedKnownHosts = "UserKnownHostsFile=\(HostKeyService.knownHostsURL.path)"
+
+        for arguments in [try masterArguments(connection), try unlockArguments(connection)] {
+            let configIndex = try XCTUnwrap(arguments.firstIndex(of: "-F"))
+            XCTAssertEqual(arguments[configIndex + 1], "/dev/null")
+            XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
+            XCTAssertTrue(arguments.contains(expectedKnownHosts))
+        }
+    }
+
     func testTurningOffStrictCheckingStillRefusesAChangedKey() throws {
         var relaxed = connection
         relaxed.strictHostKeyChecking = false
@@ -132,14 +143,26 @@ final class SSHCommandBuilderTests: XCTestCase {
         let arguments = SSHCommandBuilder.controlArguments(
             for: connection, controlPath: "/tmp/ctl", command: "check")
         XCTAssertTrue(arguments.contains("ControlPath=/tmp/ctl"))
+        XCTAssertTrue(arguments.contains("-F"))
+        XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
         let commandIndex = arguments.firstIndex(of: "-O")
         XCTAssertNotNil(commandIndex)
         XCTAssertEqual(arguments[commandIndex! + 1], "check")
     }
 
+    func testAbandonedControlCleanupUsesTheSameIsolation() {
+        let arguments = SSHCommandBuilder.abandonedControlArguments(controlPath: "/tmp/ctl")
+        XCTAssertTrue(arguments.contains("-F"))
+        XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
+        XCTAssertTrue(arguments.contains("ControlPath=/tmp/ctl"))
+        XCTAssertTrue(arguments.contains("abandoned-session"))
+    }
+
     func testTheTerminalSessionAttachesRatherThanBecomingASecondMaster() {
         let arguments = SSHCommandBuilder.attachArguments(for: connection, controlPath: "/tmp/ctl")
         XCTAssertTrue(arguments.contains("ControlMaster=no"))
+        XCTAssertTrue(arguments.contains("-F"))
+        XCTAssertTrue(arguments.contains("GlobalKnownHostsFile=/dev/null"))
         XCTAssertFalse(arguments.contains("-M"))
         XCTAssertFalse(arguments.contains("-N"))
         XCTAssertEqual(arguments.last, "10.0.0.4")
