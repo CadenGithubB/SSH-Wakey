@@ -47,7 +47,7 @@ enum HelpNotes {
             """),
         HelpTopic(
             icon: "lock.shield",
-            title: "Your password is used once and then thrown away",
+            title: "Your password is used once and never saved",
             body: """
             A separate native helper submits your password directly to SSH, then clears its controlled \
             buffer and exits. SSH-Wakey does not save it or put it in command arguments. Native \
@@ -101,7 +101,7 @@ enum HelpNotes {
 
         HelpTopic(
             icon: "lock.shield",
-            title: "Your password is used once and then thrown away",
+            title: "Your password is used once and never saved",
             body: """
             A separate native helper submits your password directly to SSH, then clears its controlled \
             buffer and exits. SSH-Wakey does not save it or put it in command arguments. Native \

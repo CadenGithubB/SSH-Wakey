@@ -19,7 +19,8 @@ final class AppSecurityCoordinator {
     private final class UnlockAttempt { var id: UUID? }
 
     init(store: ConnectionStore, sessions: SSHSessionManager,
-         detailReveal providedDetailReveal: DetailRevealController? = nil) {
+         detailReveal providedDetailReveal: DetailRevealController? = nil,
+         pasteboard: NSPasteboard = .general) {
         let detailReveal = providedDetailReveal ?? DetailRevealController()
         self.store = store
         self.sessions = sessions
@@ -27,15 +28,21 @@ final class AppSecurityCoordinator {
         let unlockAttempt = UnlockAttempt()
         self.unlockAttempt = unlockAttempt
         inactivity = AppLockController { [weak store, weak sessions, weak detailReveal] _ in
-            guard let store, store.isAppLockEnabled || store.isAuthenticating else { return }
-            unlockAttempt.id = nil
-            // Revoke session capabilities first, including work awaiting a
-            // network result. A cancelled unlock cannot publish after lock().
-            sessions?.setAppLocked(true)
+            let locksVault = store.map { $0.isAppLockEnabled || $0.isAuthenticating } ?? false
+            if locksVault {
+                unlockAttempt.id = nil
+                // Revoke session capabilities first, including work awaiting a
+                // network result. A cancelled unlock cannot publish after lock().
+                sessions?.setAppLocked(true)
+            }
+            // Without App Lock the vault stays open, but sleep, screen lock and
+            // user switch still end transient exposure: revealed details, a
+            // copied recovery phrase, and a partly typed passphrase.
             detailReveal?.revoke()
-            store.lock()
-            RecoveryClipboard.clearIfOwned()
-            NotificationCenter.default.post(name: .wakeyDidLock, object: nil)
+            if locksVault { store?.lock() }
+            RecoveryClipboard.clearIfOwned(pasteboard: pasteboard)
+            NotificationCenter.default.post(name: .wakeyDidSuspend, object: nil)
+            if locksVault { NotificationCenter.default.post(name: .wakeyDidLock, object: nil) }
         }
     }
 
@@ -160,7 +167,8 @@ final class DetailRevealController {
 
     init(
         interval: TimeInterval = 60,
-        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        // Keeps counting while the Mac sleeps, like App Lock's own lease.
+        now: @escaping () -> TimeInterval = AppLockController.continuousUptime,
         authenticator: (any OwnerAuthenticating)? = nil
     ) {
         self.interval = interval.isFinite && interval >= 1 && interval <= 300
@@ -236,9 +244,11 @@ final class DetailRevealController {
 
     private func scheduleExpiration(generation expected: UInt64) {
         expiration?.cancel()
-        let nanoseconds = UInt64(interval * 1_000_000_000)
+        let interval = interval
+        // The continuous clock advances during sleep. Sleep also revokes the
+        // lease through the lock callback, and checkDeadline() backs both up.
         expiration = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: nanoseconds)
+            try? await Task.sleep(for: .seconds(interval), clock: .continuous)
             guard !Task.isCancelled, let self, self.generation == expected else { return }
             self.revoke()
         }
@@ -247,4 +257,6 @@ final class DetailRevealController {
 
 extension Notification.Name {
     static let wakeyDidLock = Notification.Name("com.CadenGithubB.sshwakey.didLock")
+    /// Sleep, screen lock or user switch, posted whether or not App Lock is on.
+    static let wakeyDidSuspend = Notification.Name("com.CadenGithubB.sshwakey.didSuspend")
 }

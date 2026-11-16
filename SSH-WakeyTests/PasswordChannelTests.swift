@@ -20,9 +20,9 @@ final class PasswordChannelTests: XCTestCase {
         channels = []
         try? FileManager.default.removeItem(at: directory)
     }
-    private func makeChannel() throws -> AskpassChannel {
+    private func makeChannel(mayRelease: @escaping @Sendable () -> Bool = { true }) throws -> AskpassChannel {
         let child = directory.appendingPathComponent(String(channels.count))
-        let channel = try AskpassChannel(context: context, directory: child)
+        let channel = try AskpassChannel(context: context, directory: child, mayRelease: mayRelease)
         channels.append(channel)
         return channel
     }
@@ -164,6 +164,11 @@ final class PasswordChannelTests: XCTestCase {
         XCTAssertEqual(outcome.promptedAt, 10)
         XCTAssertEqual(outcome.repeatedPrompts, 3)
     }
+    func testAHelperFailureIsReportedApartFromCancellation() {
+        var outcome = AskpassChannel.Outcome(); outcome.helperFailed = true
+        XCTAssertTrue(outcome.summary.contains("password helper failed"), outcome.summary)
+        XCTAssertFalse(outcome.summary.contains("cancelled"), outcome.summary)
+    }
     func testCancellationPreventsAFirstPromptReservation() {
         var outcome = AskpassChannel.Outcome(); outcome.cancelled = true
         XCTAssertFalse(outcome.reservePrompt(at: 1))
@@ -195,7 +200,17 @@ final class PasswordChannelTests: XCTestCase {
     func testSandboxDeniesUnrelatedFilesAndNewNetworkConnectionsButAllowsPassedChannels() async throws {
         try await exerciseRealSSH(sandboxProbe: true)
     }
-    private func exerciseRealSSH(manualPopup: Bool = false, sandboxProbe: Bool = false) async throws {
+    /// The service's real submit path with a synthetic answer in place of the
+    /// popup: exactly the answer and a newline reach ssh's pipe, then it exits.
+    func testTheServiceWritesExactlyTheAnswerAndANewlineAfterTheAppSaysSend() async throws {
+        try await exerciseRealSSH(syntheticDelivery: .released)
+    }
+    func testTheServiceWritesNothingWhenTheAppWithholdsSend() async throws {
+        try await exerciseRealSSH(syntheticDelivery: .withheld)
+    }
+    private enum SyntheticDelivery { case released, withheld }
+    private func exerciseRealSSH(manualPopup: Bool = false, sandboxProbe: Bool = false,
+                                 syntheticDelivery: SyntheticDelivery? = nil) async throws {
         // sshd inetd mode consumes stdin/stdout: no listening socket, service
         // configuration, actual saved key, password or remote host is involved.
         for name in ["host_key", "client_key"] {
@@ -231,7 +246,7 @@ final class PasswordChannelTests: XCTestCase {
         // SSH has already authenticated using the disposable key. Its fixed
         // LocalCommand then exercises the genuine helper/parent authorization
         // with a synthetic destination; submitted text goes to a test pipe and is discarded.
-        let channel = try makeChannel()
+        let channel = try makeChannel(mayRelease: { syntheticDelivery != .withheld })
         let helper = HelperLayout.adapterPath
         if manualPopup { print("SSHWAKEY_UI_HELPER_PATH=\(helper)") }
         if sandboxProbe {
@@ -241,6 +256,7 @@ final class PasswordChannelTests: XCTestCase {
         let quotedHelper = helper.replacingOccurrences(of: "%", with: "%%")
             .replacingOccurrences(of: "'", with: "'\\''")
         let localCommand = sandboxProbe ? "exec '\(quotedHelper)' --ssh-wakey-sandbox-check --diagnostic-only"
+            : syntheticDelivery != nil ? "exec '\(quotedHelper)' --ssh-wakey-delivery-check --diagnostic-only"
             : manualPopup ? "exec '\(quotedHelper)' 'Password:'"
             : AskpassHelper.authenticationCommand(helperPath: helper)
         let transportLog = directory.appendingPathComponent("synthetic-transport.log")
@@ -264,9 +280,13 @@ final class PasswordChannelTests: XCTestCase {
         let passwordPipe = Pipe()
         process.standardOutput = passwordPipe
         // This read end belongs only to the synthetic test, not the main app's
-        // normal password flow. Never print or persist submitted text.
+        // normal password flow. Never print or persist submitted text. Only
+        // the synthetic delivery check keeps its fixed synthetic answer.
+        let received = ReceivedBytes()
+        let keepsBytes = syntheticDelivery != nil
         passwordPipe.fileHandleForReading.readabilityHandler = { handle in
-            _ = handle.availableData
+            let chunk = handle.availableData
+            if keepsBytes { received.append(chunk) }
         }
         defer { passwordPipe.fileHandleForReading.readabilityHandler = nil }
         process.standardError = transportOutput
@@ -279,6 +299,30 @@ final class PasswordChannelTests: XCTestCase {
             while process.isRunning && Date() < cleanupDeadline { usleep(10_000) }
         }
         try channel.registerSSHProcess(process)
+        if let syntheticDelivery {
+            let deadline = Date().addingTimeInterval(15)
+            var diagnostic = ""
+            while !diagnostic.contains("SSHWAKEY_DELIVERY_EXIT") && process.isRunning && Date() < deadline {
+                try await Task.sleep(nanoseconds: 20_000_000)
+                diagnostic = (try? String(contentsOf: transportLog, encoding: .utf8)) ?? ""
+            }
+            // Pipe reads are asynchronous; allow the last chunk to arrive.
+            let drained = Date().addingTimeInterval(0.5)
+            while Date() < drained && received.bytes.count < 17 { try await Task.sleep(nanoseconds: 10_000_000) }
+            XCTAssertNotNil(channel.outcome.promptedAt, diagnostic)
+            XCTAssertFalse(channel.outcome.helperFailed, diagnostic)
+            switch syntheticDelivery {
+            case .released:
+                XCTAssertTrue(diagnostic.contains("SSHWAKEY_DELIVERY_EXIT 0"), diagnostic)
+                XCTAssertTrue(channel.outcome.served)
+                XCTAssertEqual(received.bytes, Data("synthetic-answer\n".utf8))
+            case .withheld:
+                XCTAssertTrue(diagnostic.contains("SSHWAKEY_DELIVERY_EXIT 1"), diagnostic)
+                XCTAssertFalse(channel.outcome.served)
+                XCTAssertTrue(received.bytes.isEmpty, "no bytes may reach ssh without the app's go-ahead")
+            }
+            return
+        }
         if manualPopup || sandboxProbe {
             let deadline = Date().addingTimeInterval(manualPopup ? 90 : 15)
             while !channel.outcome.served && !channel.outcome.cancelled && process.isRunning && Date() < deadline {
@@ -287,7 +331,9 @@ final class PasswordChannelTests: XCTestCase {
             let finalOutcome = channel.outcome
             print("SSHWAKEY_UI_STATUS served=\(finalOutcome.served) cancelled=\(finalOutcome.cancelled) wrongProgramAttempts=\(finalOutcome.wrongProgramAttempts)")
             XCTAssertNotNil(channel.outcome.promptedAt, "the authenticated helper did not open its native popup")
-            XCTAssertTrue(channel.outcome.served || channel.outcome.cancelled,
+            XCTAssertFalse(channel.outcome.helperFailed,
+                           "the password helper chain stopped before the service replied")
+            XCTAssertTrue(channel.outcome.served || channel.outcome.cancelled || channel.outcome.helperFailed,
                           "manual UI audit timed out; cleanup cancels the popup")
             XCTAssertFalse(channel.outcome.authenticated, "one password argument must not select the status callback")
             XCTAssertEqual(channel.outcome.wrongProgramAttempts, 0)
@@ -362,6 +408,15 @@ final class PasswordChannelTests: XCTestCase {
         XCTAssertNil(AskpassHelper.requestFromEnvironment(environment: bad, arguments: ["app", "Password:"]))
         XCTAssertNotNil(AskpassHelper.requestFromEnvironment(environment: valid, arguments: ["app", "Password:"]))
     }
+    func testOpenSSHConfirmationAndNotificationInvocationsAreRefused() {
+        let valid = [AskpassProtocol.socketEnvironmentKey: "/tmp/fixture",
+                     AskpassProtocol.nonceEnvironmentKey: String(repeating: "a", count: 64)]
+        for label in ["confirm", "none", ""] {
+            var labelled = valid; labelled["SSH_ASKPASS_PROMPT"] = label
+            XCTAssertNil(AskpassHelper.requestFromEnvironment(environment: labelled, arguments: ["app", "Password:"]),
+                         label)
+        }
+    }
     func testMetadataEncodingIsBoundedAndRejectsMalformedJSON() {
         XCTAssertNil(AskpassProtocol.encode(String(repeating: "a", count: AskpassProtocol.maxRequestBytes)))
         XCTAssertNil(AskpassProtocol.decode(AskpassProtocol.Message.self, "garbage"))
@@ -412,4 +467,12 @@ final class PasswordChannelReportingTests: XCTestCase {
             XCTAssertTrue(SSHSessionManager.annotated(failure, with: outcome).guidance?.contains("was refused") ?? false)
         }
     }
+}
+
+/// Collects only the synthetic delivery check's fixed answer.
+private final class ReceivedBytes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
+    var bytes: Data { lock.lock(); defer { lock.unlock() }; return data }
 }

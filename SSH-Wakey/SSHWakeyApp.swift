@@ -133,7 +133,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        sessions?.disconnectAll()
+        Self.cleanUpForTermination(sessions: sessions)
+    }
+
+    /// The recovery phrase's clipboard timer lives in this process and dies
+    /// with it, so a copied phrase is cleared here rather than left behind.
+    /// A crash or Force Quit skips this.
+    static func cleanUpForTermination(sessions: SSHSessionManager?,
+                                      pasteboard: NSPasteboard = .general) {
+        RecoveryClipboard.clearIfOwned(pasteboard: pasteboard)
+        sessions?.shutDownForTermination()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

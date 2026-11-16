@@ -11,7 +11,7 @@ have to remember usernames, addresses and ports when you need to get back into
 a machine.
 
 It is a launcher, not a terminal. The password is typed once per attempt, used
-once, and thrown away.
+once, and never saved.
 
 **Standard** (`com.CadenGithubB.sshwakey`) is the public app. You add machines,
 choose Wake or Open a session per host, and can encrypt the saved list. It
@@ -20,7 +20,7 @@ never reads a configuration profile.
 **Managed** (`com.CadenGithubB.sshwakey.managed`) is the IT copy. Jamf assigns
 the list. Wake only: no add, edit, remove, export, or Terminal. The employee
 still types the office Mac password; nothing in the profile is a secret.
-Notes and the schema are in [docs/jamf/README.md](docs/jamf/README.md).
+Notes and the schema are in [docs/JamfDocs/README.md](docs/JamfDocs/README.md).
 
 - Swift and SwiftUI, macOS 14 or later
 - No third-party dependencies at all
@@ -57,7 +57,7 @@ xcodebuild -project SSH-Wakey.xcodeproj -scheme SSH-Wakey -destination 'platform
 `get-task-allow` entitlement, restricting ordinary debugger attachment and code
 injection. The main app's Debug configuration permits debugger attachment;
 both password helpers retain Hardened Runtime in every configuration.
-[SECURITY.md](SECURITY.md) explains these boundaries and how to check a build.
+[SECURITY.md](docs/SECURITY.md) explains these boundaries and how to check a build.
 
 Local builds are ad-hoc signed (`CODE_SIGN_IDENTITY = "-"`). The main app runs
 `/usr/bin/ssh` and writes its private trust and connection files outside a
@@ -97,7 +97,7 @@ The **SSH-Wakey Managed** scheme (`com.CadenGithubB.sshwakey.managed`) is the IT
 build: Wake only, list from a forced Jamf payload, no add/edit/export. The
 catalog is the live profile, not a copy into `connections.json`. Learned
 Ethernet addresses for Wake are kept in a small local cache. Notes and the
-schema are in [docs/jamf/README.md](docs/jamf/README.md).
+schema are in [docs/JamfDocs/README.md](docs/JamfDocs/README.md).
 
 ```
 xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configuration ManagedRelease build
@@ -105,7 +105,7 @@ xcodebuild -project SSH-Wakey.xcodeproj -scheme "SSH-Wakey Managed" -configurati
 
 ```bash
 ./Scripts/make-zip.sh
-./Scripts/make-zip-managed.sh
+./Scripts/make-zip.sh --managed
 ```
 
 The first writes `build/SSH-Wakey.zip`. The second writes
@@ -120,7 +120,7 @@ The first writes `build/SSH-Wakey.zip`. The second writes
 Writes `build/SSH-Wakey.zip`. For the IT copy:
 
 ```bash
-./Scripts/make-zip-managed.sh
+./Scripts/make-zip.sh --managed
 ```
 
 Writes `build/SSH-Wakey-Managed.zip`. Packaging strips local source paths and
@@ -128,9 +128,8 @@ optional build-machine metadata from staged copies, omits extended attributes
 and ACLs from ZIP entries, and re-signs all three components before checking
 signatures and sandbox entitlements. Unzip the download and move the app to
 Applications. ZIP entries use fixed timestamps and permissions rather than
-copying local filesystem metadata. The legacy DMG scripts are for local use;
-disk images can retain macOS provenance metadata. Certificate-signed inputs are refused by this ad-hoc
-packaging path.
+copying local filesystem metadata. Certificate-signed inputs are refused by
+this ad-hoc packaging path.
 
 These scripts currently produce local
 ad-hoc-signed verification builds, not notarised distribution artifacts. Before
@@ -430,7 +429,7 @@ an already-authorized channel, SSH's output pipe, and read-only code handles for
 caller verification. macOS still gives sandboxed processes access to their own
 container and necessary system resources; this is not a claim of zero filesystem
 access. Recovery passphrases also cross native/cryptographic framework boundaries.
-[SECURITY.md](SECURITY.md) documents the complete memory and threat model without
+[SECURITY.md](docs/SECURITY.md) documents the complete memory and threat model without
 claiming that plaintext never exists in RAM.
 
 Success comes from a verified helper callback that OpenSSH runs after
@@ -610,6 +609,10 @@ windows attached to them), dismisses open editors, clears activity records, and
 releases the open vault key and connection list. Unsaved edits are discarded.
 An explicitly copied recovery phrase is cleared from the clipboard if nothing
 else has replaced it. Unlocking never reconnects a previous session automatically.
+
+With App Lock off, sleep, screen lock and user switching still hide revealed
+connection details, clear a copied recovery phrase and empty a half-filled
+passphrase sheet. The vault itself stays open.
 Terminal scrollback and remote background jobs are outside App Lock's control.
 
 The protected local key uses this Mac's Secure Enclave and requires macOS user
@@ -621,12 +624,12 @@ App Lock or exporting readable data.
 App Lock does not save or reuse remote SSH passwords. Each password-based SSH
 attempt still has its own separate native prompt. App Lock also does not secure
 an already compromised operating system or guarantee erasure of framework-owned
-memory. See [SECURITY.md](SECURITY.md) for its boundaries.
+memory. See [SECURITY.md](docs/SECURITY.md) for its boundaries.
 
 ## Tests
 
-The suite currently contains **388 tests**, run against both the standard and
-managed app variants during the September 2026 security review.
+The suite contains **432 tests**, run against both the standard and managed app
+variants.
 
 The suite covers private-file access, unavailable storage, concurrent writes,
 vault metadata and independent recovery slots, key rotation, managed validation,

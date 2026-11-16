@@ -30,7 +30,7 @@ final class AppLockController {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var inputMonitor: Any?
     @ObservationIgnored private var observers: [(NotificationCenter, NSObjectProtocol)] = []
-    @ObservationIgnored private var distributedObservers: [NSObjectProtocol] = []
+    @ObservationIgnored private var screenLockObserver: ScreenLockObserver?
 
     init(interval: TimeInterval = AppLockController.defaultInterval,
          now: @escaping @MainActor () -> TimeInterval = AppLockController.continuousUptime,
@@ -132,14 +132,17 @@ final class AppLockController {
         // These system notifications supplement the workspace lifecycle events.
         // The unlock notification is conservative catch-up if a lock was missed;
         // it never grants app access. Forging either notification only locks.
+        // A manual screen lock with the display awake produces no workspace
+        // notification, and AppKit holds distributed notifications back from
+        // an inactive app unless the observer asks for immediate delivery.
+        let screenLock = ScreenLockObserver { [weak self] in self?.lockNow(reason: .screenLocked) }
         let distributed = DistributedNotificationCenter.default()
         for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
-            let token = distributed.addObserver(forName: Notification.Name(name), object: nil, queue: .main) {
-                [weak self] _ in
-                MainActor.assumeIsolated { self?.lockNow(reason: .screenLocked) }
-            }
-            distributedObservers.append(token)
+            distributed.addObserver(screenLock, selector: #selector(ScreenLockObserver.receive(_:)),
+                                    name: Notification.Name(name), object: nil,
+                                    suspensionBehavior: .deliverImmediately)
         }
+        screenLockObserver = screenLock
     }
 
     func stopMonitoring() {
@@ -149,8 +152,8 @@ final class AppLockController {
         inputMonitor = nil
         for (center, token) in observers { center.removeObserver(token) }
         observers.removeAll()
-        for token in distributedObservers { DistributedNotificationCenter.default().removeObserver(token) }
-        distributedObservers.removeAll()
+        if let screenLockObserver { DistributedNotificationCenter.default().removeObserver(screenLockObserver) }
+        screenLockObserver = nil
         isMonitoring = false
     }
 
@@ -182,6 +185,22 @@ final class AppLockController {
         timer?.invalidate()
         if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
         for (center, token) in observers { center.removeObserver(token) }
-        for token in distributedObservers { DistributedNotificationCenter.default().removeObserver(token) }
+        if let screenLockObserver { DistributedNotificationCenter.default().removeObserver(screenLockObserver) }
+    }
+}
+
+/// The selector-based registration that allows immediate delivery needs an
+/// NSObject observer; AppLockController is not one.
+private final class ScreenLockObserver: NSObject {
+    private let handler: @MainActor () -> Void
+
+    init(handler: @escaping @MainActor () -> Void) { self.handler = handler }
+
+    @objc func receive(_ notification: Notification) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { handler() }
+        } else {
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.handler() } }
+        }
     }
 }

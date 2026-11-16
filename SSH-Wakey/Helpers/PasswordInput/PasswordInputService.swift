@@ -36,7 +36,10 @@ final class PasswordInputService: NSObject, PasswordInputProtocol {
         var own: SecCode?, code: SecStaticCode?, info: CFDictionary?
         guard SecCodeCopySelf([], &own) == errSecSuccess, let own,
               SecCodeCopyStaticCode(own, [], &code) == errSecSuccess, let code,
-              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
+              // Both flags, so the entitlements dictionary is present whichever
+              // one governs it on this macOS version.
+              SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSRequirementInformation),
+                                            &info) == errSecSuccess,
               let values = info as? [String: Any],
               let entitlements = values[kSecCodeInfoEntitlementsDict as String] as? [String: Any]
         else { return false }
@@ -57,27 +60,45 @@ final class PasswordInputService: NSObject, PasswordInputProtocol {
     func collect(_ channel: FileHandle, output: FileHandle, appCode: FileHandle,
                  appInfo: Data, grant text: String, reply: @escaping (Bool) -> Void) {
         guard let (grant, server) = validate(channel, output: output, appCode: appCode, appInfo: appInfo, grant: text)
-        else { finish(false, reply: reply); return }
+        else { fail(channel, reply: reply); return }
         DispatchQueue.main.async {
             let authorization = PasswordAuthorization(channel: channel, grant: grant, server: server, adapter: self.adapter)
-            guard authorization.isValid, let answer = PasswordPromptView.collect(authorization: authorization) else {
+            let answer: SecureBuffer?
+            do {
+                answer = authorization.isValid ? try PasswordPromptView.collect(authorization: authorization) : nil
+            } catch {
+                self.fail(channel, reply: reply); return
+            }
+            guard let answer else {
                 _ = AskpassProtocol.sendLine("cancelled", to: channel.fileDescriptor)
                 self.finish(false, reply: reply)
                 return
             }
-            guard authorization.isValid,
-                  AskpassProtocol.sendLine("ready", to: channel.fileDescriptor),
-                  AskpassProtocol.readLine(from: channel.fileDescriptor) == "send", authorization.isValid else {
-                answer.wipe(); self.finish(false, reply: reply); return
-            }
-            alarm(3)
-            let wrote = answer.withBytes { AskpassProtocol.writeAll(output.fileDescriptor, $0) } ?? false
-            answer.wipe()
-            var newline: UInt8 = 10
-            let ended = wrote && withUnsafeBytes(of: &newline) { AskpassProtocol.writeAll(output.fileDescriptor, $0) }
-            if ended { _ = AskpassProtocol.sendLine("sent", to: channel.fileDescriptor) }
-            self.finish(ended, reply: reply)
+            self.deliver(answer: answer, authorization: authorization, channel: channel, output: output, reply: reply)
         }
+    }
+    /// Everything after the answer exists: wait for the app's go-ahead, write
+    /// the answer and a newline to ssh's pipe, then wipe the buffer.
+    @MainActor
+    private func deliver(answer: SecureBuffer, authorization: PasswordAuthorization, channel: FileHandle,
+                         output: FileHandle, reply: @escaping (Bool) -> Void) {
+        guard authorization.isValid,
+              AskpassProtocol.sendLine("ready", to: channel.fileDescriptor),
+              AskpassProtocol.readLine(from: channel.fileDescriptor) == "send", authorization.isValid else {
+            answer.wipe(); finish(false, reply: reply); return
+        }
+        alarm(3)
+        let wrote = answer.withBytes { AskpassProtocol.writeAll(output.fileDescriptor, $0) } ?? false
+        answer.wipe()
+        var newline: UInt8 = 10
+        let ended = wrote && withUnsafeBytes(of: &newline) { AskpassProtocol.writeAll(output.fileDescriptor, $0) }
+        if ended { _ = AskpassProtocol.sendLine("sent", to: channel.fileDescriptor) }
+        finish(ended, reply: reply)
+    }
+    /// Tells the app this was a helper failure, not the person cancelling.
+    private func fail(_ channel: FileHandle, reply: @escaping (Bool) -> Void) {
+        _ = AskpassProtocol.sendLine("failed", to: channel.fileDescriptor)
+        finish(false, reply: reply)
     }
     private func validate(_ channel: FileHandle, output: FileHandle, appCode: FileHandle,
                           appInfo: Data, grant text: String) -> (AskpassProtocol.Grant, ProcessIdentity)? {
@@ -100,6 +121,21 @@ final class PasswordInputService: NSObject, PasswordInputProtocol {
         return (grant, server)
     }
     #if DEBUG
+    /// The real delivery path with a synthetic answer in place of the popup,
+    /// compiled out of every release build like probe. It has the same caller
+    /// and grant checks and never displays a password field.
+    func deliverSynthetic(_ channel: FileHandle, output: FileHandle, appCode: FileHandle,
+                          appInfo: Data, grant text: String, reply: @escaping (Bool) -> Void) {
+        guard let (grant, server) = validate(channel, output: output, appCode: appCode, appInfo: appInfo, grant: text)
+        else { fail(channel, reply: reply); return }
+        DispatchQueue.main.async {
+            let authorization = PasswordAuthorization(channel: channel, grant: grant, server: server, adapter: self.adapter)
+            guard authorization.isValid, let answer = try? SecureBuffer("synthetic-answer") else {
+                self.fail(channel, reply: reply); return
+            }
+            self.deliver(answer: answer, authorization: authorization, channel: channel, output: output, reply: reply)
+        }
+    }
     /// Synthetic negative-access audit, compiled out of every release build.
     /// It has the same caller/grant checks and cannot display a password field.
     func probe(_ channel: FileHandle, output: FileHandle, appCode: FileHandle,

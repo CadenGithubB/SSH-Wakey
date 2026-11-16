@@ -47,7 +47,11 @@ enum AskpassHelper {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         arguments: [String] = CommandLine.arguments
     ) -> Request? {
-        guard let path = environment[AskpassProtocol.socketEnvironmentKey],
+        // OpenSSH labels non-password askpass uses out of band: "confirm" for
+        // a yes/no permission question, "none" for a notification. Password
+        // prompts leave it unset, so any label is refused before connecting.
+        guard environment["SSH_ASKPASS_PROMPT"] == nil,
+              let path = environment[AskpassProtocol.socketEnvironmentKey],
               let nonce = environment[AskpassProtocol.nonceEnvironmentKey],
               !path.isEmpty, nonce.utf8.count == 64, arguments.count == 2,
               arguments[1].utf8.count < 2048 else { return nil }

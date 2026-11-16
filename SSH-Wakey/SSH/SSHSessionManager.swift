@@ -321,6 +321,10 @@ final class SSHSessionManager {
                     outcome = .cancelled
                     break
                 }
+                if channel.outcome.helperFailed {
+                    outcome = .helperFailed
+                    break
+                }
                 if channel.outcome.authenticated {
                     outcome = .authenticated
                     break
@@ -394,6 +398,13 @@ final class SSHSessionManager {
                 kind: .cancelled,
                 headline: "Connection cancelled.",
                 guidance: "The SSH attempt was stopped and its password helper was closed.", detail: nil))
+            return
+        case .helperFailed:
+            terminate(process)
+            try? FileManager.default.removeItem(at: directory)
+            record(connection, mode: mode, result: Self.helperFailure.headline,
+                   channel: channel.outcome, output: diagnostics.text)
+            states[id] = .failed(Self.helperFailure)
             return
         case .timedOut:
             terminate(process)
@@ -547,7 +558,7 @@ final class SSHSessionManager {
     }
 
     private enum AttemptOutcome: Equatable {
-        case stillWaiting, authenticated, exited, timedOut, cancelled
+        case stillWaiting, authenticated, exited, timedOut, cancelled, helperFailed
     }
 
     // MARK: - Live sessions
@@ -571,6 +582,17 @@ final class SSHSessionManager {
             terminate(attempt.process)
         }
         for id in Array(sessions.keys) { disconnect(id) }
+    }
+
+    /// Quitting ends this process before cancelled attempts unwind, so their
+    /// folders (socket, diagnostic FIFO, owner file; no secrets) go now rather
+    /// than waiting for the next launch's sweep, as locking already does.
+    func shutDownForTermination() {
+        disconnectAll()
+        for directory in attemptDirectories.values {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        attemptDirectories.removeAll()
     }
 
     /// Hands the already-authenticated session to Terminal. No password is
@@ -631,6 +653,14 @@ final class SSHSessionManager {
     }
 
     // MARK: - Helpers
+
+    /// Distinct from Cancel: the person did not stop this.
+    static let helperFailure = SSHFailure(
+        kind: .helperFailed,
+        headline: "The password window stopped before sending a password.",
+        guidance: "No password was sent. SSH-Wakey's password entry failed one of its own checks "
+            + "or quit unexpectedly. Try again. If it keeps happening, reinstall SSH-Wakey.",
+        detail: nil)
 
     static let cancelledFailure = SSHFailure(
         kind: .cancelled,
@@ -818,15 +848,13 @@ final class OutputCollector: @unchecked Sendable {
     }
     func reset() {
         lock.lock(); defer { lock.unlock() }
-        data.resetBytes(in: 0..<data.count)
-        data.removeAll(keepingCapacity: false)
+        VaultCrypto.erase(&data)
         overflow = false; total = 0; discarding = false
     }
     func suppressStorage() {
         lock.lock(); defer { lock.unlock() }
         discarding = true
-        data.resetBytes(in: 0..<data.count)
-        data.removeAll(keepingCapacity: false)
+        VaultCrypto.erase(&data)
     }
     var exceededLimit: Bool { lock.lock(); defer { lock.unlock() }; return overflow }
     var text: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }

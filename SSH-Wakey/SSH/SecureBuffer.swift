@@ -43,6 +43,10 @@ final class SecureBuffer: @unchecked Sendable {
             munmap(pointer, length)
             throw BufferError.memoryLockFailed
         }
+        // XNU zeroes still-wired pages when the mapping is destroyed, which
+        // covers a crash, signal or exit() before wipe() runs. wipe() zeroes
+        // and unwires on every normal path, so a failure here is not fatal.
+        _ = madvise(pointer, length, MADV_ZERO_WIRED_PAGES)
         self.base = pointer
         self.mappedSize = length
         self.capacity = capacity

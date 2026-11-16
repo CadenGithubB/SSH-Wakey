@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased
+
+### Hardened
+
+- Quitting clears a recovery passphrase copied by SSH-Wakey, and the 90-second
+  clipboard timer now counts wall-clock time through sleep. A crash or Force
+  Quit still leaves the copy on the clipboard.
+- Sleep, screen lock and user switching now hide revealed details, clear a
+  copied recovery passphrase and empty an open passphrase sheet even with App
+  Lock off. Switching to another app still keeps the sheet's fields.
+- The detail-reveal lease uses a clock that keeps running during sleep.
+- The screen-lock notification now asks for immediate delivery instead of
+  relying on AppKit's default for background apps.
+- The askpass adapter refuses OpenSSH confirmation and notification requests
+  (`SSH_ASKPASS_PROMPT` set) before contacting the app.
+- Release checks require the app and adapter to carry no entitlements at all,
+  not just none from a list of known-unsafe ones.
+- Locked password buffers ask the kernel to zero them if the service dies before
+  its own wipe.
+- Recovery passphrase checks compare against the key already open, without
+  decrypting the connection list again. Turning App Lock on or off derives the
+  recovery key once instead of twice.
+- Readable exports and the diagnostics buffer are wiped with `memset_s` after
+  use. Salts come from `arc4random_buf`, which cannot fail.
+- A Keychain permission prompt for the existing key now appears before the
+  passphrase sheet opens, not while a passphrase is in memory.
+
+### Fixed
+
+- Passphrases are normalized to Unicode NFC, so the same accented phrase typed
+  precomposed or decomposed opens the vault. Older vaults sealed from the raw
+  bytes still open.
+- Recovery unlock upgrades pre-1.3 (format 1) vaults to the current format and
+  rotates their data key.
+- A vault from a newer SSH-Wakey version is reported as needing an update, not
+  as damaged.
+- A password helper that fails its own checks or quits is reported as a helper
+  failure instead of looking like Cancel.
+- Quitting removes in-progress attempt folders instead of leaving them for the
+  next launch's cleanup.
+
+### Changed
+
+- `Scripts/make-zip.sh --managed` replaces `make-zip-managed.sh`. The legacy DMG
+  scripts are removed. Packaging and install scripts now show build errors.
+- `SECURITY.md` moved to `docs/`, and the Jamf notes to `docs/JamfDocs/`.
+
+### Validation
+
+- Standard and Managed ZIPs package with the stricter entitlement check. A test
+  copy with one extra entitlement was refused.
+
 ## 1.4.0 (build 6) — 2026-09-21
 
 ### Added
@@ -83,5 +135,5 @@
   and runtime testing across supported macOS versions and hardware configurations
   remain prerequisites for a broadly validated distribution release.
 
-See [SECURITY.md](SECURITY.md) and the dated reports in [docs/](docs/) for the
+See [SECURITY.md](docs/SECURITY.md) and the dated reports in [docs/](docs/) for the
 security boundaries, validation evidence, and remaining limitations.

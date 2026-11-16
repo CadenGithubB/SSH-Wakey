@@ -19,6 +19,7 @@ struct SSHFailure: Equatable, Sendable {
         case cancelled
         case launchFailed
         case askpassRefused
+        case helperFailed
         case unknown
     }
 

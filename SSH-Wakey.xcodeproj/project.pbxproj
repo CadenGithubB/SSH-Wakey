@@ -165,7 +165,7 @@
 		AB0000000000000000000098 /* ManagedPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ManagedPolicyTests.swift"; sourceTree = "<group>"; };
 		AB000000000000000000009A /* ManagedStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ManagedStoreTests.swift"; sourceTree = "<group>"; };
 		AB0000000000000000000032 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "README.md"; sourceTree = "<group>"; };
-		AB0000000000000000000033 /* SECURITY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "SECURITY.md"; sourceTree = "<group>"; };
+		AB0000000000000000000033 /* SECURITY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; name = "SECURITY.md"; path = "docs/SECURITY.md"; sourceTree = "<group>"; };
 		AB0000000000000000000034 /* SSH-Wakey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "SSH-Wakey.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AB0000000000000000000035 /* SSH-WakeyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "SSH-WakeyTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AC2000000000000000000001 /* AppLockController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLockController.swift; sourceTree = "<group>"; };

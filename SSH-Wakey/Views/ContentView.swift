@@ -163,6 +163,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .showWakeyHelp)) { _ in
             sheet = .help
         }
+        .onReceive(NotificationCenter.default.publisher(for: .wakeyDidSuspend)) { _ in
+            revokeDetailPresentation()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .wakeyDidLock)) { _ in
             accessGeneration = UUID()
             sheet = nil
@@ -517,9 +520,6 @@ struct ContentView: View {
             requestToggleReveal(connection.id, generation: generation)
         }
         .frame(width: 20, height: 20)
-        .help(shown
-              ? "Hide this connection's username, address and dates"
-              : "Show this one, and hide whichever is showing now")
         .accessibilityLabel(shown ? "Hide details" : "Show details")
     }
 
@@ -988,6 +988,10 @@ private struct RevealToggleControl: NSViewRepresentable {
         button.setButtonType(.momentaryChange)
         button.target = context.coordinator
         button.action = #selector(Coordinator.clicked)
+        // One tooltip, set once. Changing it while it is on screen (the state
+        // flips as you click) left AppKit's tooltip window stuck open.
+        button.toolTip = "Show or hide this connection's username, address and dates. "
+            + "Only one connection's details show at a time."
         applyAppearance(to: button)
         return button
     }
@@ -1003,9 +1007,6 @@ private struct RevealToggleControl: NSViewRepresentable {
         button.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
             .withSymbolConfiguration(config)
         button.contentTintColor = isRevealed ? .controlAccentColor : .secondaryLabelColor
-        button.toolTip = isRevealed
-            ? "Hide this connection's username, address and dates"
-            : "Show this one, and hide whichever is showing now"
     }
 
     final class Coordinator: NSObject {

@@ -60,8 +60,9 @@ enum SSHArgumentParser {
 
     /// Options SSH-Wakey supplies from the connection fields or from its own
     /// session management. Letting them be set twice produces confusing results.
-    /// `loglevel` is here because the app relies on `LogLevel=VERBOSE` to tell a
-    /// successful login from a refused one.
+    /// `loglevel` is here because failure explanations are classified from
+    /// ssh's `LogLevel=VERBOSE` diagnostics. Success is proven by the signed
+    /// LocalCommand callback, never by log text.
     static let reservedKeywords: Set<String> = [
         "controlpath", "controlmaster", "controlpersist", "stricthostkeychecking",
         "numberofpasswordprompts", "batchmode", "user", "hostname", "port",
@@ -83,6 +84,9 @@ enum SSHArgumentParser {
         "t", "T", "n", "C", "b",
     ]
     private static let valueFlags: Set<Character> = ["i", "o"]
+    /// `-v` stays allowed for troubleshooting. It only adds detail to the
+    /// bounded diagnostic log, which is suppressed before password entry, and
+    /// no decision depends on log text.
     private static let booleanFlags: Set<Character> = ["4", "6", "v"]
 
     /// Tokenise and check in one step. This is what callers should use.
